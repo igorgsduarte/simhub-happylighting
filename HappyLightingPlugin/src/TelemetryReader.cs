@@ -14,6 +14,7 @@ public sealed class TelemetryReader(ILogger logger)
     public TelemetrySnapshot Read(ITelemetrySource source, PluginSettings settings)
     {
         source.TryGetBool("DataCorePlugin.GameData.NewData.PitLim", out var pitLimiter);
+        source.TryGetBool("DataCorePlugin.GameRunning", out var gameRunning);
         source.TryGetBool("DataCorePlugin.GameData.NewData.OnPitRoad", out var pitRoad);
         source.TryGetBool("DataCorePlugin.GameData.NewData.dcHeadlights", out var headlights);
         source.TryGetBool("DataCorePlugin.GameData.NewData.IsNight", out var isNight);
@@ -22,6 +23,7 @@ public sealed class TelemetryReader(ILogger logger)
 
         var snapshot = new TelemetrySnapshot
         {
+            GameRunning = gameRunning,
             PitLane = pitRoad,
             PitLimiter = pitLimiter,
             HeadlightsOn = headlights,

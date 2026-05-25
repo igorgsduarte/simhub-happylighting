@@ -10,13 +10,18 @@ public sealed class BrightnessProfile
             value = settings.NightBrightness;
         }
 
-        value = Math.Clamp(value, 0, 100);
         return (byte)Math.Round(value * 2.55);
     }
 
     public byte ResolveIdleBrightness(PluginSettings settings)
     {
-        var value = Math.Clamp(settings.IdleBrightness, 0, 100);
+        var value = Compatibility.Clamp(settings.IdleBrightness, 0, 100);
         return (byte)Math.Round(value * 2.55);
+    }
+
+    public int ApplyGlobalMax(PluginSettings settings, int brightnessPercent)
+    {
+        var globalMax = Compatibility.Clamp(settings.MaxBrightness, 0, 100);
+        return Math.Min(Compatibility.Clamp(brightnessPercent, 0, 100), globalMax);
     }
 }

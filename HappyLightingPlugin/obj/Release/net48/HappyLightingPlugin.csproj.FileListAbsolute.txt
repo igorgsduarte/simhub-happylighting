@@ -1,0 +1,12 @@
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.csproj.AssemblyReference.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.AssemblyInfoInputs.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.AssemblyInfo.cs
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.csproj.CoreCompileInputs.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.sourcelink.json
+C:\Program Files (x86)\SimHub\PluginsData\Common\net48\README.md
+C:\Program Files (x86)\SimHub\PluginsData\Common\net48\HappyLightingPlugin.dll
+C:\Program Files (x86)\SimHub\PluginsData\Common\net48\HappyLightingPlugin.pdb
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLig.EE07B9E5.Up2Date
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.dll
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\net48\HappyLightingPlugin.pdb

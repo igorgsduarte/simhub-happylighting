@@ -1,0 +1,14 @@
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.csproj.AssemblyReference.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.AssemblyInfoInputs.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.AssemblyInfo.cs
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.csproj.CoreCompileInputs.cache
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.sourcelink.json
+C:\Program Files (x86)\SimHub\README.md
+C:\Program Files (x86)\SimHub\HappyLightingPlugin.dll
+C:\Program Files (x86)\SimHub\HappyLightingPlugin.pdb
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.dll
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\obj\Release\HappyLightingPlugin.pdb
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\README.md
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\HappyLightingPlugin.dll
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\HappyLightingPlugin.pdb

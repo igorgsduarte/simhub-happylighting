@@ -36,7 +36,7 @@ public sealed class SettingsViewModel
     public static RgbColor ParseHex(string? value, RgbColor fallback)
     {
         if (string.IsNullOrWhiteSpace(value)) return fallback;
-        var hex = value.Trim().TrimStart('#');
+        var hex = value!.Trim().TrimStart('#');
         if (hex.Length != 6) return fallback;
 
         try

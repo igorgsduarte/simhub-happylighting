@@ -1,4 +1,4 @@
-using System.Text.Json;
+using Newtonsoft.Json;
 
 namespace HappyLightingPlugin;
 
@@ -15,13 +15,13 @@ public sealed class SettingsStore
     public async Task<PluginSettings> LoadAsync(CancellationToken cancellationToken)
     {
         if (!File.Exists(_path)) return new PluginSettings();
-        await using var fs = File.OpenRead(_path);
-        return (await JsonSerializer.DeserializeAsync<PluginSettings>(fs, cancellationToken: cancellationToken)) ?? new PluginSettings();
+        var json = await Task.Run(() => File.ReadAllText(_path), cancellationToken);
+        return JsonConvert.DeserializeObject<PluginSettings>(json) ?? new PluginSettings();
     }
 
     public async Task SaveAsync(PluginSettings settings, CancellationToken cancellationToken)
     {
-        await using var fs = File.Create(_path);
-        await JsonSerializer.SerializeAsync(fs, settings, cancellationToken: cancellationToken, options: new JsonSerializerOptions { WriteIndented = true });
+        var json = JsonConvert.SerializeObject(settings, Formatting.Indented);
+        await Task.Run(() => File.WriteAllText(_path, json), cancellationToken);
     }
 }
