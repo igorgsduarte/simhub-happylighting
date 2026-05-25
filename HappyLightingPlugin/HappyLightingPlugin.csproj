@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net48</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>HappyLightingPlugin</AssemblyName>
+    <RootNamespace>HappyLightingPlugin</RootNamespace>
+    <GeneratePackageOnBuild>false</GeneratePackageOnBuild>
+  </PropertyGroup>
+
+  <!-- Optional local machine override:
+       set SIMHUB_INSTALL_PATH to your SimHub root, e.g. C:\Program Files (x86)\SimHub\ -->
+  <PropertyGroup Condition="'$(SIMHUB_INSTALL_PATH)' != ''">
+    <OutputPath>$(SIMHUB_INSTALL_PATH)PluginsData\Common\</OutputPath>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="8.0.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>
