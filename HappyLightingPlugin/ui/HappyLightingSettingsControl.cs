@@ -1,12 +1,12 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Threading;
+using DrawingColor = System.Drawing.Color;
 using SimHub.Bluetooth;
 using SimHub.Plugins.DataPlugins.RGBDriverCommon.LedBehaviourEditors;
 using SimHub.Plugins.Styles;
-using System.ComponentModel;
-using System.Windows.Threading;
-using DrawingColor = System.Drawing.Color;
 
 namespace HappyLightingPlugin;
 
@@ -15,156 +15,58 @@ public sealed class HappyLightingSettingsControl : UserControl
     private readonly HappyLightingSimHubPlugin _plugin;
     private TextBox _deviceText = null!;
     private ComboBox _devices = null!;
-    private LedColorEditorRGB _gameNotRunningColor = null!;
-    private SHToggleCheckbox _enableGameNotRunning = null!;
-    private Slider _debugBrightness = null!;
-    private TextBlock _debugBrightnessValue = null!;
     private TextBlock _deviceStatus = null!;
     private TextBlock _status = null!;
-    private DispatcherTimer? _deviceStatusTimer;
+    private TextBlock _diagnostics = null!;
+    private DispatcherTimer? _timer;
     private bool _updatingDeviceText;
 
     public HappyLightingSettingsControl(HappyLightingSimHubPlugin plugin)
     {
         _plugin = plugin;
-
-        var panel = new StackPanel
-        {
-            Margin = new Thickness(16),
-            Orientation = Orientation.Vertical
-        };
-
-        panel.Children.Add(new SHSection
-        {
-            Title = "HappyLighting",
-            ShowSeparator = true,
-            Content = BuildContent()
-        });
-
+        var panel = new StackPanel { Margin = new Thickness(16), Orientation = Orientation.Vertical };
+        panel.Children.Add(new SHSection { Title = "HappyLighting", ShowSeparator = true, Content = BuildContent() });
         Content = new ScrollViewer { Content = panel };
-
-        Loaded += (_, _) => StartDeviceStatusUpdates();
-        Unloaded += (_, _) => StopDeviceStatusUpdates();
+        Loaded += (_, _) => StartUpdates();
+        Unloaded += (_, _) => _timer?.Stop();
     }
 
     private StackPanel BuildContent()
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical };
-
-        _deviceStatus = new TextBlock
-        {
-            Margin = new Thickness(0, 0, 0, 8),
-            FontWeight = FontWeights.SemiBold
-        };
+        _deviceStatus = new TextBlock { Margin = new Thickness(0, 0, 0, 8), FontWeight = FontWeights.SemiBold };
+        _status = new TextBlock { Margin = new Thickness(0, 0, 0, 12), FontWeight = FontWeights.SemiBold };
         panel.Children.Add(_deviceStatus);
-        RefreshDeviceStatus();
-
-        _status = new TextBlock
-        {
-            Margin = new Thickness(0, 0, 0, 12),
-            FontWeight = FontWeights.SemiBold
-        };
         panel.Children.Add(_status);
 
-        panel.Children.Add(new SHSubSection
-        {
-            Title = "Connection",
-            Content = BuildConnectionSection()
-        });
-
+        panel.Children.Add(new SHSubSection { Title = "Conexao BLE", Content = BuildConnectionSection() });
         panel.Children.Add(new SHSectionSeparator());
-
-        panel.Children.Add(new SHSubSection
-        {
-            Title = "Brightness",
-            Content = BuildBrightnessSection()
-        });
-
+        panel.Children.Add(new SHSubSection { Title = "Regras e Prioridade", Content = BuildRulesSection() });
         panel.Children.Add(new SHSectionSeparator());
-
-        panel.Children.Add(new SHSubSection
-        {
-            Title = "Game Not Running",
-            Content = BuildGameNotRunningSection()
-        });
-
+        panel.Children.Add(new SHSubSection { Title = "Cores e Brilho", Content = BuildBrightnessAndColorsSection() });
         panel.Children.Add(new SHSectionSeparator());
+        panel.Children.Add(new SHSubSection { Title = "Diagnostico", Content = BuildDiagnosticsSection() });
 
-        panel.Children.Add(new SHSubSection
-        {
-            Title = "When Game Is Running",
-            Content = BuildEffectsSection()
-        });
-
-        return panel;
-    }
-
-    private StackPanel BuildBrightnessSection()
-    {
-        var panel = new StackPanel { Orientation = Orientation.Vertical };
-        _debugBrightnessValue = new TextBlock
-        {
-            Text = $"Global max brightness: {_plugin.Settings.MaxBrightness}%",
-            Margin = new Thickness(0, 0, 0, 4)
-        };
-        panel.Children.Add(_debugBrightnessValue);
-
-        _debugBrightness = new Slider
-        {
-            Minimum = 1,
-            Maximum = 100,
-            TickFrequency = 5,
-            IsSnapToTickEnabled = false,
-            Value = Compatibility.Clamp(_plugin.Settings.MaxBrightness, 1, 100),
-            Width = 360,
-            HorizontalAlignment = HorizontalAlignment.Left
-        };
-        _debugBrightness.ValueChanged += (_, _) =>
-        {
-            UpdateSetting(() => _plugin.Settings.MaxBrightness = (int)Math.Round(_debugBrightness.Value));
-            _debugBrightnessValue.Text = $"Global max brightness: {_plugin.Settings.MaxBrightness}%";
-        };
-        panel.Children.Add(_debugBrightness);
-
+        RefreshUi();
         return panel;
     }
 
     private StackPanel BuildConnectionSection()
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical };
-
-        panel.Children.Add(new TextBlock { Text = "Selected device" });
-        _deviceText = new TextBox
-        {
-            Text = BuildDeviceText(),
-            Margin = new Thickness(0, 4, 0, 12),
-            MinWidth = 520
-        };
-        _deviceText.TextChanged += (_, _) =>
+        panel.Children.Add(new TextBlock { Text = "Dispositivo selecionado" });
+        _deviceText = new TextBox { Text = _plugin.Settings.BluetoothAddress, Margin = new Thickness(0, 4, 0, 12), MinWidth = 520 };
+        _deviceText.TextChanged += (_, _) => UpdateSetting(() =>
         {
             if (_updatingDeviceText) return;
-            UpdateSetting(() =>
-            {
-                _plugin.Settings.BluetoothAddress = _deviceText.Text.Trim();
-                _plugin.Settings.BluetoothDeviceId = _deviceText.Text.Trim();
-            });
-        };
+            _plugin.Settings.BluetoothAddress = _deviceText.Text.Trim();
+        });
         panel.Children.Add(_deviceText);
 
-        var discoveryRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
-        var discoverButton = new SHButtonSecondary
-        {
-            Content = "Discover devices",
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        discoverButton.Click += (_, _) => DiscoverDevices(discoverButton);
-        discoveryRow.Children.Add(discoverButton);
-
-        _devices = new ComboBox
-        {
-            MinWidth = 520,
-            DisplayMemberPath = nameof(BluetoothDeviceOption.DisplayName)
-        };
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+        var discover = new SHButtonSecondary { Content = "Discover devices", Margin = new Thickness(0, 0, 8, 0) };
+        discover.Click += (_, _) => DiscoverDevices(discover);
+        _devices = new ComboBox { MinWidth = 520, DisplayMemberPath = nameof(BluetoothDeviceOption.DisplayName) };
         _devices.SelectionChanged += (_, _) =>
         {
             if (_devices.SelectedItem is not BluetoothDeviceOption selected) return;
@@ -173,78 +75,93 @@ public sealed class HappyLightingSettingsControl : UserControl
                 _plugin.Settings.BluetoothAddress = selected.AddressHex;
                 _plugin.Settings.BluetoothDeviceId = selected.Id;
                 _plugin.Settings.BluetoothDeviceName = selected.Name;
-                _plugin.Settings.BluetoothAddressDescription = selected.AddressDescription;
             });
             _updatingDeviceText = true;
-            _deviceText.Text = selected.DisplayName;
+            _deviceText.Text = selected.AddressHex;
             _updatingDeviceText = false;
-            RefreshDeviceStatus();
-            _ = _plugin.ConnectSavedDeviceAsync().ContinueWith(_ => Dispatcher.Invoke(RefreshDeviceStatus));
+            _ = _plugin.ConnectSavedDeviceAsync();
         };
-        discoveryRow.Children.Add(_devices);
-        panel.Children.Add(discoveryRow);
+        row.Children.Add(discover);
+        row.Children.Add(_devices);
+        panel.Children.Add(row);
 
-        var testButton = new SHButtonPrimary
-        {
-            Content = "Test connection (blink green 3x)",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 0, 0, 18)
-        };
-        testButton.Click += (_, _) => RunConnectionTest(testButton);
-        panel.Children.Add(testButton);
+        var test = new SHButtonPrimary { Content = "Test connection", HorizontalAlignment = HorizontalAlignment.Left };
+        test.Click += (_, _) => RunConnectionTest(test);
+        panel.Children.Add(test);
 
+        panel.Children.Add(MakeIntSlider("Burst rate (ms)", 5, 80, () => _plugin.Settings.BleBurstRateMs, v => _plugin.Settings.BleBurstRateMs = v));
+        panel.Children.Add(MakeIntSlider("Steady rate (ms)", 10, 120, () => _plugin.Settings.BleSteadyRateMs, v => _plugin.Settings.BleSteadyRateMs = v));
+        panel.Children.Add(MakeIntSlider("Reconnect base (ms)", 100, 1000, () => _plugin.Settings.BleReconnectBackoffBaseMs, v => _plugin.Settings.BleReconnectBackoffBaseMs = v));
         return panel;
     }
 
-    private StackPanel BuildGameNotRunningSection()
+    private StackPanel BuildRulesSection()
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical };
+        panel.Children.Add(MakeIntSlider("Blink on (ms)", 80, 1000, () => _plugin.Settings.BlinkOnMs, v => _plugin.Settings.BlinkOnMs = v));
+        panel.Children.Add(MakeIntSlider("Blink off (ms)", 80, 1000, () => _plugin.Settings.BlinkOffMs, v => _plugin.Settings.BlinkOffMs = v));
+        panel.Children.Add(MakeIntSlider("Effect debounce (ms)", 0, 500, () => _plugin.Settings.EffectDebounceMs, v => _plugin.Settings.EffectDebounceMs = v));
+        panel.Children.Add(MakeIntSlider("Min active (ms)", 0, 1000, () => _plugin.Settings.EffectMinActiveMs, v => _plugin.Settings.EffectMinActiveMs = v));
+        return panel;
+    }
 
-        _enableGameNotRunning = new SHToggleCheckbox
-        {
-            Content = "Enable color when game is not running",
-            IsChecked = _plugin.Settings.EnableGameNotRunningEffect,
-            Margin = new Thickness(0, 0, 0, 8)
-        };
-        _enableGameNotRunning.Checked += (_, _) => UpdateSetting(() => _plugin.Settings.EnableGameNotRunningEffect = true);
-        _enableGameNotRunning.Unchecked += (_, _) => UpdateSetting(() => _plugin.Settings.EnableGameNotRunningEffect = false);
-        panel.Children.Add(_enableGameNotRunning);
+    private StackPanel BuildBrightnessAndColorsSection()
+    {
+        var panel = new StackPanel { Orientation = Orientation.Vertical };
+        panel.Children.Add(MakeIntSlider("Global max brightness (%)", 1, 100, () => _plugin.Settings.MaxBrightness, v => _plugin.Settings.MaxBrightness = v));
+        panel.Children.Add(MakeIntSlider("Day brightness (%)", 1, 100, () => _plugin.Settings.DayBrightness, v => _plugin.Settings.DayBrightness = v));
+        panel.Children.Add(MakeIntSlider("Night brightness (%)", 1, 100, () => _plugin.Settings.NightBrightness, v => _plugin.Settings.NightBrightness = v));
+        panel.Children.Add(MakeIntSlider("Idle brightness (%)", 1, 100, () => _plugin.Settings.IdleBrightness, v => _plugin.Settings.IdleBrightness = v));
 
-        _gameNotRunningColor = new LedColorEditorRGB
-        {
-            Label = "Game not running color",
-            Color = ToDrawingColor(_plugin.Settings.GameNotRunningColor),
-            Margin = new Thickness(0, 4, 0, 12)
-        };
-        DependencyPropertyDescriptor
-            .FromProperty(LedColorEditorRGB.ColorProperty, typeof(LedColorEditorRGB))
-            ?.AddValueChanged(_gameNotRunningColor, (_, _) =>
-        {
-            UpdateSetting(() => _plugin.Settings.GameNotRunningColor = ToRgbColor(_gameNotRunningColor.Color));
-        });
-        panel.Children.Add(_gameNotRunningColor);
+        panel.Children.Add(BuildColorEditor("Game not running (white)", () => _plugin.Settings.GameNotRunningColor, c => _plugin.Settings.GameNotRunningColor = c));
+        panel.Children.Add(BuildColorEditor("Yellow flag", () => _plugin.Settings.YellowFlagColor, c => _plugin.Settings.YellowFlagColor = c));
+        panel.Children.Add(BuildColorEditor("Green flag", () => _plugin.Settings.GreenFlagColor, c => _plugin.Settings.GreenFlagColor = c));
+        panel.Children.Add(BuildColorEditor("White flag", () => _plugin.Settings.WhiteFlagColor, c => _plugin.Settings.WhiteFlagColor = c));
+        panel.Children.Add(BuildColorEditor("Pit/Limiter", () => _plugin.Settings.PitLaneColor, c => _plugin.Settings.PitLaneColor = c));
+        panel.Children.Add(BuildColorEditor("Low fuel", () => _plugin.Settings.LowFuelColor, c => _plugin.Settings.LowFuelColor = c));
 
-        var playButton = new SHButtonSecondary
-        {
-            Content = "Play",
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Margin = new Thickness(0, 0, 0, 12)
-        };
-        playButton.Click += (_, _) => RunEffectTest(playButton, EffectTestKind.GameNotRunning, "Game Not Running");
-        panel.Children.Add(playButton);
+        var buttons = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 8, 0, 0) };
+        var preset = new SHButtonSecondary { Content = "Preset Endurance", Margin = new Thickness(0, 0, 8, 0) };
+        preset.Click += (_, _) => UpdateSetting(ApplyEndurancePreset);
+        var reset = new SHButtonSecondary { Content = "Reset defaults" };
+        reset.Click += (_, _) => UpdateSetting(ResetDefaults);
+        buttons.Children.Add(preset);
+        buttons.Children.Add(reset);
+        panel.Children.Add(buttons);
 
         return panel;
     }
 
-    private string BuildDeviceText()
+    private StackPanel BuildDiagnosticsSection()
     {
-        if (!string.IsNullOrWhiteSpace(_plugin.Settings.BluetoothDeviceName) ||
-            !string.IsNullOrWhiteSpace(_plugin.Settings.BluetoothDeviceId))
-        {
-            return $"{_plugin.Settings.BluetoothDeviceName} - {_plugin.Settings.BluetoothDeviceId}".Trim(' ', '-');
-        }
+        var panel = new StackPanel { Orientation = Orientation.Vertical };
+        _diagnostics = new TextBlock { TextWrapping = TextWrapping.Wrap, FontFamily = new System.Windows.Media.FontFamily("Consolas") };
+        panel.Children.Add(_diagnostics);
+        return panel;
+    }
 
-        return _plugin.Settings.BluetoothAddress;
+    private FrameworkElement MakeIntSlider(string label, int min, int max, Func<int> getter, Action<int> setter)
+    {
+        var panel = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 6, 0, 6) };
+        var text = new TextBlock { Text = $"{label}: {getter()}" };
+        var slider = new Slider { Minimum = min, Maximum = max, Value = getter(), Width = 360, HorizontalAlignment = HorizontalAlignment.Left };
+        slider.ValueChanged += (_, _) =>
+        {
+            var value = (int)Math.Round(slider.Value);
+            text.Text = $"{label}: {value}";
+            UpdateSetting(() => setter(value));
+        };
+        panel.Children.Add(text);
+        panel.Children.Add(slider);
+        return panel;
+    }
+
+    private FrameworkElement BuildColorEditor(string label, Func<RgbColor> getter, Action<RgbColor> setter)
+    {
+        var editor = new LedColorEditorRGB { Label = label, Color = ToDrawingColor(getter()), Margin = new Thickness(0, 4, 0, 4) };
+        DependencyPropertyDescriptor.FromProperty(LedColorEditorRGB.ColorProperty, typeof(LedColorEditorRGB))
+            ?.AddValueChanged(editor, (_, _) => UpdateSetting(() => setter(ToRgbColor(editor.Color))));
+        return editor;
     }
 
     private async void DiscoverDevices(Button button)
@@ -252,30 +169,16 @@ public sealed class HappyLightingSettingsControl : UserControl
         try
         {
             button.IsEnabled = false;
-            _status.Text = "Scanning Bluetooth lights and BLE advertisements...";
-
-            var devices = await Task.Run(() =>
-            {
-                return BleLightController.DiscoverDevicesAsync(CancellationToken.None).GetAwaiter().GetResult()
-                    .Select(device => new BluetoothDeviceOption(device))
-                    .OrderBy(device => device.Name)
-                    .ToList();
-            });
-
-            _devices.ItemsSource = devices;
-            _status.Text = devices.Count == 0
-                ? "No Bluetooth devices found. Power-cycle the light, keep the phone app closed, and try again."
-                : $"Found {devices.Count} device(s). Select one from the list.";
+            _status.Text = "Scanning...";
+            var devices = await BleLightController.DiscoverDevicesAsync(CancellationToken.None);
+            _devices.ItemsSource = devices.Select(d => new BluetoothDeviceOption(d)).ToList();
+            _status.Text = $"Found {devices.Count} devices";
         }
         catch (Exception ex)
         {
             _status.Text = "Discovery failed: " + ex.Message;
         }
-        finally
-        {
-            button.IsEnabled = true;
-            RefreshDeviceStatus();
-        }
+        finally { button.IsEnabled = true; }
     }
 
     private async void RunConnectionTest(Button button)
@@ -283,294 +186,84 @@ public sealed class HappyLightingSettingsControl : UserControl
         try
         {
             button.IsEnabled = false;
-            _status.Text = "Testing connection...";
             await _plugin.TestConnectionAsync();
-            _status.Text = "Test sent: green blink 3x.";
+            _status.Text = "Connection OK";
         }
         catch (Exception ex)
         {
             _status.Text = "Test failed: " + ex.Message;
         }
-        finally
-        {
-            button.IsEnabled = true;
-            RefreshDeviceStatus();
-        }
+        finally { button.IsEnabled = true; }
     }
 
-    private StackPanel BuildEffectsSection()
+    private void ApplyEndurancePreset()
     {
-        var panel = new StackPanel { Orientation = Orientation.Vertical };
-
-        panel.Children.Add(BuildEffectCard(
-            "Critical flags",
-            "Black and checkered flag alerts",
-            _plugin.Settings.EnableCriticalFlags,
-            value => _plugin.Settings.EnableCriticalFlags = value,
-            EffectTestKind.CriticalFlags,
-            "Black flag color",
-            (Func<RgbColor>)(() => _plugin.Settings.BlackFlagColor),
-            (Action<RgbColor>)(value => _plugin.Settings.BlackFlagColor = value),
-            "Checkered color",
-            (Func<RgbColor>)(() => _plugin.Settings.CheckeredColor),
-            (Action<RgbColor>)(value => _plugin.Settings.CheckeredColor = value)));
-
-        panel.Children.Add(BuildEffectCard(
-            "Marshal flags",
-            "Yellow, blue, green and white flag effects",
-            _plugin.Settings.EnableMarshalFlags,
-            value => _plugin.Settings.EnableMarshalFlags = value,
-            EffectTestKind.MarshalFlags,
-            "Yellow flag color",
-            (Func<RgbColor>)(() => _plugin.Settings.YellowFlagColor),
-            (Action<RgbColor>)(value => _plugin.Settings.YellowFlagColor = value),
-            "Blue flag color",
-            (Func<RgbColor>)(() => _plugin.Settings.BlueFlagColor),
-            (Action<RgbColor>)(value => _plugin.Settings.BlueFlagColor = value),
-            "Green flag color",
-            (Func<RgbColor>)(() => _plugin.Settings.GreenFlagColor),
-            (Action<RgbColor>)(value => _plugin.Settings.GreenFlagColor = value),
-            "White flag color",
-            (Func<RgbColor>)(() => _plugin.Settings.WhiteFlagColor),
-            (Action<RgbColor>)(value => _plugin.Settings.WhiteFlagColor = value)));
-
-        panel.Children.Add(BuildEffectCard(
-            "Pit lane / limiter",
-            "Blink while in pit lane or pit limiter is active",
-            _plugin.Settings.EnablePitLaneEffects,
-            value => _plugin.Settings.EnablePitLaneEffects = value,
-            EffectTestKind.PitLaneLimiter,
-            "Pit lane color",
-            (Func<RgbColor>)(() => _plugin.Settings.PitLaneColor),
-            (Action<RgbColor>)(value => _plugin.Settings.PitLaneColor = value)));
-
-        panel.Children.Add(BuildEffectCard(
-            "Low fuel",
-            "Pulse when fuel reaches the configured threshold",
-            _plugin.Settings.EnableLowFuelEffects,
-            value => _plugin.Settings.EnableLowFuelEffects = value,
-            EffectTestKind.LowFuel,
-            "Low fuel color",
-            (Func<RgbColor>)(() => _plugin.Settings.LowFuelColor),
-            (Action<RgbColor>)(value => _plugin.Settings.LowFuelColor = value)));
-
-        panel.Children.Add(BuildEffectCard(
-            "Night light",
-            "Warm light when night mode/headlights are active",
-            _plugin.Settings.EnableNightLightEffects,
-            value => _plugin.Settings.EnableNightLightEffects = value,
-            EffectTestKind.NightLight,
-            "Night light color",
-            (Func<RgbColor>)(() => _plugin.Settings.NightLightColor),
-            (Action<RgbColor>)(value => _plugin.Settings.NightLightColor = value)));
-
-        return panel;
+        _plugin.Settings.MaxBrightness = 55;
+        _plugin.Settings.DayBrightness = 60;
+        _plugin.Settings.NightBrightness = 30;
+        _plugin.Settings.BlinkOnMs = 250;
+        _plugin.Settings.BlinkOffMs = 250;
+        _plugin.Settings.EffectDebounceMs = 120;
+        _plugin.Settings.EffectMinActiveMs = 300;
     }
 
-    private Border BuildEffectCard(
-        string title,
-        string subtitle,
-        bool enabled,
-        Action<bool> setEnabled,
-        EffectTestKind effectTestKind,
-        params object[] colorBindings)
+    private void ResetDefaults()
     {
-        var header = new Grid();
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-
-        var labels = new StackPanel { Orientation = Orientation.Vertical };
-        labels.Children.Add(new TextBlock { Text = title, FontSize = 14, FontWeight = FontWeights.SemiBold });
-        labels.Children.Add(new TextBlock { Text = subtitle, FontStyle = FontStyles.Italic, Opacity = 0.85, Margin = new Thickness(0, 2, 0, 0) });
-        Grid.SetColumn(labels, 0);
-        header.Children.Add(labels);
-
-        var actions = new StackPanel
+        var currentDevice = (_plugin.Settings.BluetoothAddress, _plugin.Settings.BluetoothDeviceId, _plugin.Settings.BluetoothDeviceName);
+        _plugin.Settings = new PluginSettings
         {
-            Orientation = Orientation.Horizontal,
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(16, 0, 0, 0)
+            BluetoothAddress = currentDevice.BluetoothAddress,
+            BluetoothDeviceId = currentDevice.BluetoothDeviceId,
+            BluetoothDeviceName = currentDevice.BluetoothDeviceName
         };
-
-        var playButton = new SHButtonSecondary
-        {
-            Content = "Play",
-            Margin = new Thickness(0, 0, 8, 0)
-        };
-        playButton.Click += (_, _) => RunEffectTest(playButton, effectTestKind, title);
-        actions.Children.Add(playButton);
-
-        var toggle = new SHToggleCheckbox
-        {
-            IsChecked = enabled,
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        toggle.Checked += (_, _) => UpdateSetting(() => setEnabled(true));
-        toggle.Unchecked += (_, _) => UpdateSetting(() => setEnabled(false));
-        actions.Children.Add(toggle);
-        Grid.SetColumn(actions, 1);
-        header.Children.Add(actions);
-
-        var content = new StackPanel { Orientation = Orientation.Vertical };
-        content.Children.Add(header);
-
-        var colorGrid = new UniformGrid
-        {
-            Columns = 2,
-            Margin = new Thickness(0, 12, 0, 0)
-        };
-
-        for (var i = 0; i < colorBindings.Length; i += 3)
-        {
-            var label = (string)colorBindings[i];
-            var getColor = (Func<RgbColor>)colorBindings[i + 1];
-            var setColor = (Action<RgbColor>)colorBindings[i + 2];
-            colorGrid.Children.Add(BuildColorEditor(label, getColor, setColor));
-        }
-
-        content.Children.Add(colorGrid);
-
-        return new Border
-        {
-            Background = new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(45, 45, 45)),
-            CornerRadius = new CornerRadius(4),
-            Padding = new Thickness(12),
-            Margin = new Thickness(0, 0, 0, 8),
-            Child = content
-        };
-    }
-
-    private LedColorEditorRGB BuildColorEditor(string label, Func<RgbColor> getColor, Action<RgbColor> setColor)
-    {
-        var editor = new LedColorEditorRGB
-        {
-            Label = label,
-            Color = ToDrawingColor(getColor()),
-            Margin = new Thickness(4)
-        };
-
-        DependencyPropertyDescriptor
-            .FromProperty(LedColorEditorRGB.ColorProperty, typeof(LedColorEditorRGB))
-            ?.AddValueChanged(editor, (_, _) => UpdateSetting(() => setColor(ToRgbColor(editor.Color))));
-
-        return editor;
-    }
-
-    private async void RunEffectTest(Button button, EffectTestKind effectTestKind, string title)
-    {
-        try
-        {
-            button.IsEnabled = false;
-            _status.Text = $"Playing {title} effect on the device...";
-            await _plugin.PlayEffectTestAsync(effectTestKind);
-            _status.Text = $"{title} effect test finished.";
-        }
-        catch (Exception ex)
-        {
-            _status.Text = $"{title} effect test failed: " + ex.Message;
-        }
-        finally
-        {
-            button.IsEnabled = true;
-            RefreshDeviceStatus();
-        }
     }
 
     private void UpdateSetting(Action update)
     {
         update();
         _plugin.SaveSettings();
-        RefreshDeviceStatus();
+        RefreshUi();
     }
 
-    private void StartDeviceStatusUpdates()
+    private void StartUpdates()
     {
-        RefreshDeviceStatus();
-        _deviceStatusTimer ??= new DispatcherTimer
+        if (_timer is null)
         {
-            Interval = TimeSpan.FromSeconds(2)
-        };
-        _deviceStatusTimer.Tick -= DeviceStatusTimerTick;
-        _deviceStatusTimer.Tick += DeviceStatusTimerTick;
-        _deviceStatusTimer.Start();
+            _timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+            _timer.Tick += (_, _) => RefreshUi();
+        }
+        _timer.Start();
+        RefreshUi();
     }
 
-    private void StopDeviceStatusUpdates()
+    private void RefreshUi()
     {
-        _deviceStatusTimer?.Stop();
-    }
-
-    private void DeviceStatusTimerTick(object? sender, EventArgs e)
-    {
-        RefreshDeviceStatus();
-    }
-
-    private void RefreshDeviceStatus()
-    {
-        if (_deviceStatus is null) return;
-
         var status = _plugin.GetDeviceStatus();
-        _deviceStatus.Text = $"Device: {FormatDeviceStatus(status)}";
-        _deviceStatus.Foreground = status.State switch
-        {
-            DeviceConnectionState.Connected => System.Windows.Media.Brushes.LightGreen,
-            DeviceConnectionState.Connecting => System.Windows.Media.Brushes.Khaki,
-            DeviceConnectionState.Error => System.Windows.Media.Brushes.LightCoral,
-            _ => System.Windows.Media.Brushes.LightGray
-        };
+        _deviceStatus.Text = $"Device: {status.DeviceLabel} - {status.State} ({status.Message})";
+
+        var d = _plugin.GetDiagnostics();
+        _diagnostics.Text =
+            $"effect={d.LastDecision.EffectId} priority={d.LastDecision.Priority} reason={d.LastDecision.Reason}\n" +
+            $"pit={d.LastTelemetry.PitLane} limiter={d.LastTelemetry.PitLimiter} fuel={d.LastTelemetry.FuelLiters:0.00} flag={d.LastTelemetry.MarshalFlag} running={d.LastTelemetry.GameRunning}\n" +
+            $"enq={d.BleStats.FramesEnqueued} sent={d.BleStats.FramesSent} coalesced={d.BleStats.FramesCoalesced} writes={d.BleStats.PayloadWrites} failures={d.BleStats.WriteFailures}\n" +
+            $"avgQueueToWriteMs={d.BleStats.AvgQueueToWriteMs:0.0} avgTelemetryToWriteMs={d.BleStats.AvgTelemetryToWriteMs:0.0} lastWrite={d.BleStats.LastWriteUtc:HH:mm:ss}";
     }
 
-    private static string FormatDeviceStatus(DeviceStatusSnapshot status)
-    {
-        var device = string.IsNullOrWhiteSpace(status.DeviceLabel) ? "No device" : status.DeviceLabel;
-        var state = status.State switch
-        {
-            DeviceConnectionState.NotConfigured => "not configured",
-            DeviceConnectionState.Disconnected => "disconnected",
-            DeviceConnectionState.Connecting => "connecting",
-            DeviceConnectionState.Connected => "connected",
-            DeviceConnectionState.Error => "error",
-            _ => "unknown"
-        };
-
-        return string.IsNullOrWhiteSpace(status.Message)
-            ? $"{device} - {state}"
-            : $"{device} - {state} ({status.Message})";
-    }
-
-    private static DrawingColor ToDrawingColor(RgbColor color)
-    {
-        return DrawingColor.FromArgb(color.R, color.G, color.B);
-    }
-
-    private static RgbColor ToRgbColor(DrawingColor color)
-    {
-        return new RgbColor(color.R, color.G, color.B);
-    }
+    private static DrawingColor ToDrawingColor(RgbColor color) => DrawingColor.FromArgb(color.R, color.G, color.B);
+    private static RgbColor ToRgbColor(DrawingColor color) => new(color.R, color.G, color.B);
 
     private sealed class BluetoothDeviceOption
     {
-        public BluetoothDeviceOption(BTDevice device)
+        public BluetoothDeviceOption(BTDevice d)
         {
-            Name = device.Name ?? string.Empty;
-            Id = device.Id ?? string.Empty;
-            AddressDescription = device.AddressDescription ?? string.Empty;
-            AddressHex = device.BluetoothAdress.ToString("X12");
+            Name = d.Name ?? string.Empty;
+            Id = d.Id ?? string.Empty;
+            AddressHex = d.BluetoothAdress.ToString("X12");
         }
 
         public string Name { get; }
         public string Id { get; }
-        public string AddressDescription { get; }
         public string AddressHex { get; }
-
-        public string DisplayName
-        {
-            get
-            {
-                var label = string.IsNullOrWhiteSpace(Name) ? "Bluetooth light" : Name;
-                var id = string.IsNullOrWhiteSpace(Id) ? AddressDescription : Id;
-                return string.IsNullOrWhiteSpace(id) ? $"{label} ({AddressHex})" : $"{label} - {id}";
-            }
-        }
+        public string DisplayName => string.IsNullOrWhiteSpace(Name) ? AddressHex : $"{Name} - {Id}";
     }
 }

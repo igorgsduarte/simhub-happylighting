@@ -1,11 +1,10 @@
-using System.Collections.Concurrent;
 using Microsoft.Extensions.Logging;
 using SimHub.Bluetooth;
 using System.Globalization;
 using Windows.Devices.Bluetooth;
 using Windows.Devices.Bluetooth.Advertisement;
-using Windows.Devices.Enumeration;
 using Windows.Devices.Bluetooth.GenericAttributeProfile;
+using Windows.Devices.Enumeration;
 using Windows.Storage.Streams;
 
 namespace HappyLightingPlugin;
@@ -23,20 +22,34 @@ public sealed class BleLightController : IDisposable
 
     private readonly ILogger _logger;
     private readonly HappyLightingProtocol _protocol;
-    private readonly ConcurrentQueue<LightFrame> _queue = new();
     private readonly SemaphoreSlim _signal = new(0);
     private readonly SemaphoreSlim _connectLock = new(1, 1);
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _senderLoop;
 
-    private LightFrame? _lastSent;
+    private PluginSettings _settings = new();
     private Func<byte[], CancellationToken, Task>? _writeCharacteristic;
     private BluetoothLEDevice? _bleDevice;
     private GattCharacteristic? _writeGattCharacteristic;
     private ulong? _connectedAddress;
-    private PluginSettings _settings = new();
     private DeviceConnectionState _connectionState = DeviceConnectionState.NotConfigured;
     private string _lastStatusMessage = "No device selected.";
+
+    private LightFrame? _pendingFrame;
+    private DateTimeOffset _pendingFrameAt;
+    private LightFrame? _lastSent;
+
+    private long _framesEnqueued;
+    private long _framesSent;
+    private long _framesCoalesced;
+    private long _payloadWrites;
+    private long _writeFailures;
+    private long _queueLatencySamples;
+    private long _telemetryLatencySamples;
+    private double _sumQueueToWriteMs;
+    private double _sumTelemetryToWriteMs;
+    private DateTimeOffset _lastWriteUtc = DateTimeOffset.MinValue;
+    private string _lastError = string.Empty;
 
     public BleLightController(ILogger logger, HappyLightingProtocol protocol)
     {
@@ -53,7 +66,24 @@ public sealed class BleLightController : IDisposable
             _connectionState = DeviceConnectionState.NotConfigured;
             _lastStatusMessage = "No device selected.";
         }
+
         return Task.CompletedTask;
+    }
+
+    public void EnqueueFrame(LightFrame frame, DateTimeOffset telemetryAt)
+    {
+        Interlocked.Increment(ref _framesEnqueued);
+        var hadPending = _pendingFrame.HasValue;
+        _pendingFrame = frame;
+        _pendingFrameAt = telemetryAt;
+        if (hadPending)
+            Interlocked.Increment(ref _framesCoalesced);
+        _signal.Release();
+    }
+
+    public async Task SendFrameNowAsync(LightFrame frame, CancellationToken cancellationToken)
+    {
+        await SendFrameInternalAsync(frame, DateTimeOffset.UtcNow, cancellationToken);
     }
 
     public async Task ConnectAsync(string bluetoothAddress, CancellationToken cancellationToken)
@@ -61,29 +91,25 @@ public sealed class BleLightController : IDisposable
         await _connectLock.WaitAsync(cancellationToken);
         try
         {
-            _logger.LogInformation("Connecting to BLE device at {Address}", bluetoothAddress);
             _connectionState = DeviceConnectionState.Connecting;
             _lastStatusMessage = "Connecting...";
             var target = await ResolveBluetoothDeviceAsync(bluetoothAddress, cancellationToken);
+
             _writeCharacteristic = null;
             _writeGattCharacteristic = null;
             _connectedAddress = null;
             _bleDevice?.Dispose();
-            _bleDevice = await OpenBluetoothDeviceAsync(target, cancellationToken);
 
+            _bleDevice = await OpenBluetoothDeviceAsync(target, cancellationToken);
             if (_bleDevice is null)
-                throw new InvalidOperationException("Windows could not open the selected BLE device. Remove/re-pair it in Windows Bluetooth settings, close any phone lighting app, then click Discover devices again.");
+                throw new InvalidOperationException("Windows could not open the selected BLE device.");
 
             _writeGattCharacteristic = await ResolveWriteCharacteristicAsync(_bleDevice, cancellationToken);
-            _writeCharacteristic = async (payload, ct) =>
-            {
-                await WriteGattAsync(payload, ct);
-            };
+            _writeCharacteristic = WriteGattAsync;
             _connectedAddress = target.Address;
             _connectionState = DeviceConnectionState.Connected;
             _lastStatusMessage = "Connected.";
-
-            _logger.LogInformation("BLE connected to {Name} ({Address:X12}) using write characteristic {CharacteristicUuid}", _bleDevice.Name, target.Address, _writeGattCharacteristic.Uuid);
+            _lastError = string.Empty;
         }
         catch (Exception ex)
         {
@@ -96,127 +122,35 @@ public sealed class BleLightController : IDisposable
         }
     }
 
-    public async Task<bool> IsConnectedToAsync(string bluetoothAddress, CancellationToken cancellationToken)
-    {
-        if (_writeCharacteristic is null || !_connectedAddress.HasValue || _bleDevice is null)
-            return false;
-
-        var target = await ResolveBluetoothDeviceAsync(bluetoothAddress, cancellationToken);
-        return _connectedAddress.Value == target.Address;
-    }
-
     public async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
             return;
 
-        if (await IsConnectedToAsync(_settings.BluetoothAddress, cancellationToken))
+        if (_writeCharacteristic is not null && _connectedAddress.HasValue && _bleDevice is not null)
             return;
 
         await ConnectAsync(_settings.BluetoothAddress, cancellationToken);
     }
 
-    public DeviceStatusSnapshot GetStatus()
+    public DeviceStatusSnapshot GetStatus() => new()
     {
-        var state = _connectionState;
-        if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
-        {
-            state = DeviceConnectionState.NotConfigured;
-            _lastStatusMessage = "No device selected.";
-        }
-        else if (state == DeviceConnectionState.Connected && (_writeCharacteristic is null || _bleDevice is null))
-        {
-            state = DeviceConnectionState.Disconnected;
-            _connectionState = state;
-            _lastStatusMessage = "Disconnected.";
-        }
+        State = _connectionState,
+        DeviceLabel = BuildDeviceLabel(),
+        Message = _lastStatusMessage
+    };
 
-        return new DeviceStatusSnapshot
-        {
-            State = state,
-            DeviceLabel = BuildDeviceLabel(),
-            Message = _lastStatusMessage
-        };
-    }
-
-    public void EnqueueFrame(LightFrame frame)
-    {
-        _queue.Enqueue(frame);
-        _signal.Release();
-    }
-
-    public async Task BlinkAsync(RgbColor color, byte brightness, int count, TimeSpan onDuration, TimeSpan offDuration, CancellationToken cancellationToken)
-    {
-        for (var i = 0; i < count; i++)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            EnqueueFrame(new LightFrame(color.R, color.G, color.B, brightness, true));
-            await Task.Delay(onDuration, cancellationToken);
-            EnqueueFrame(LightFrame.Off);
-            await Task.Delay(offDuration, cancellationToken);
-        }
-    }
-
-    public async Task TestBlinkVariantsAsync(CancellationToken cancellationToken)
-    {
-        var onFrame = ApplyGlobalMaxBrightness(new LightFrame(0, 255, 0, 255, true));
-        var offFrame = ApplyGlobalMaxBrightness(new LightFrame(0, 0, 0, 255, true));
-
-        for (var i = 0; i < 3; i++)
-        {
-            foreach (var payload in _protocol.BuildFrameVariants(onFrame))
-            {
-                await WritePayloadWithReconnectAsync(payload, cancellationToken);
-                await Task.Delay(50, cancellationToken);
-            }
-
-            await Task.Delay(450, cancellationToken);
-
-            foreach (var payload in _protocol.BuildFrameVariants(offFrame))
-            {
-                await WritePayloadWithReconnectAsync(payload, cancellationToken);
-                await Task.Delay(50, cancellationToken);
-            }
-
-            await Task.Delay(300, cancellationToken);
-        }
-    }
-
-    public async Task SendFrameNowAsync(LightFrame frame, CancellationToken cancellationToken)
-    {
-        frame = ApplyGlobalMaxBrightness(frame);
-        foreach (var payload in _protocol.BuildFrameVariants(frame))
-        {
-            await WritePayloadWithReconnectAsync(payload, cancellationToken);
-            await Task.Delay(20, cancellationToken);
-        }
-
-        _lastSent = frame;
-        _logger.LogInformation("Debug frame sent R={R} G={G} B={B} Br={Br} On={On}", frame.R, frame.G, frame.B, frame.Brightness, frame.IsOn);
-    }
-
-    public async Task ReconnectAsync(CancellationToken cancellationToken)
-    {
-        while (!cancellationToken.IsCancellationRequested)
-        {
-            try
-            {
-                if (!string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
-                {
-                    await ConnectAsync(_settings.BluetoothAddress, cancellationToken);
-                    return;
-                }
-
-                _logger.LogWarning("Reconnect skipped: no Bluetooth address configured");
-                return;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Reconnect failed, retrying in 2s");
-                await Task.Delay(2000, cancellationToken);
-            }
-        }
-    }
+    public BleRuntimeStats GetRuntimeStats() => new(
+        _connectionState,
+        Interlocked.Read(ref _framesEnqueued),
+        Interlocked.Read(ref _framesSent),
+        Interlocked.Read(ref _framesCoalesced),
+        Interlocked.Read(ref _payloadWrites),
+        Interlocked.Read(ref _writeFailures),
+        _queueLatencySamples == 0 ? 0 : _sumQueueToWriteMs / _queueLatencySamples,
+        _telemetryLatencySamples == 0 ? 0 : _sumTelemetryToWriteMs / _telemetryLatencySamples,
+        _lastWriteUtc,
+        _lastError);
 
     private async Task SenderLoopAsync()
     {
@@ -225,32 +159,20 @@ public sealed class BleLightController : IDisposable
             try
             {
                 await _signal.WaitAsync(_cts.Token);
-                if (!_queue.TryDequeue(out var frame)) continue;
-                if (_lastSent.HasValue && _lastSent.Value.Equals(frame)) continue;
+                var frame = _pendingFrame;
+                if (!frame.HasValue)
+                    continue;
 
-                var writer = _writeCharacteristic;
-                if (writer is null)
+                var telemetryAt = _pendingFrameAt;
+                _pendingFrame = null;
+
+                if (_lastSent.HasValue && _lastSent.Value.Equals(frame.Value))
                 {
-                    await EnsureConnectedAsync(_cts.Token);
-                    writer = _writeCharacteristic;
-                    if (writer is null)
-                    {
-                        _logger.LogWarning("No BLE write characteristic, dropping frame");
-                        continue;
-                    }
+                    await Task.Delay(Math.Max(5, _settings.BleSteadyRateMs), _cts.Token);
+                    continue;
                 }
 
-                frame = ApplyGlobalMaxBrightness(frame);
-                foreach (var payload in _protocol.BuildFrameVariants(frame))
-                {
-                    await SendFrameAsync(frame, payload, writer, _cts.Token);
-                    await Task.Delay(20, _cts.Token);
-                }
-                _lastSent = frame;
-
-                _logger.LogInformation("Frame sent R={R} G={G} B={B} Br={Br} On={On}", frame.R, frame.G, frame.B, frame.Brightness, frame.IsOn);
-
-                await Task.Delay(Math.Max(10, _settings.BleRateLimitMs), _cts.Token);
+                await SendFrameInternalAsync(frame.Value, telemetryAt, _cts.Token);
             }
             catch (OperationCanceledException)
             {
@@ -258,81 +180,109 @@ public sealed class BleLightController : IDisposable
             }
             catch (Exception ex)
             {
+                Interlocked.Increment(ref _writeFailures);
+                _lastError = ex.Message;
                 InvalidateConnection("Send failed: " + ex.Message);
-                _logger.LogError(ex, "BLE sender loop faulted, attempting reconnect");
-                await ReconnectAsync(_cts.Token);
+                await ReconnectWithBackoffAsync(_cts.Token);
             }
         }
     }
 
-    private async Task SendFrameAsync(LightFrame frame, byte[] payload, Func<byte[], CancellationToken, Task> fallbackWriter, CancellationToken cancellationToken)
+    private async Task SendFrameInternalAsync(LightFrame frame, DateTimeOffset telemetryAt, CancellationToken cancellationToken)
     {
-        await fallbackWriter(payload, cancellationToken);
-    }
-
-    private async Task WritePayloadWithReconnectAsync(byte[] payload, CancellationToken cancellationToken)
-    {
-        await EnsureConnectedAsync(cancellationToken);
-
-        try
+        frame = ApplyGlobalMaxBrightness(frame);
+        var writer = _writeCharacteristic;
+        if (writer is null)
         {
-            var writer = _writeCharacteristic;
+            await EnsureConnectedAsync(cancellationToken);
+            writer = _writeCharacteristic;
             if (writer is null)
                 throw new InvalidOperationException("No BLE write characteristic is connected.");
+        }
 
+        var beforeWrite = DateTimeOffset.UtcNow;
+        foreach (var payload in _protocol.BuildFrameVariants(frame))
+        {
+            await WritePayloadWithReconnectAsync(payload, writer, cancellationToken);
+            Interlocked.Increment(ref _payloadWrites);
+            await Task.Delay(12, cancellationToken);
+        }
+
+        Interlocked.Increment(ref _framesSent);
+        _lastSent = frame;
+        _lastWriteUtc = DateTimeOffset.UtcNow;
+
+        _sumQueueToWriteMs += (_lastWriteUtc - beforeWrite).TotalMilliseconds;
+        _queueLatencySamples++;
+        _sumTelemetryToWriteMs += (_lastWriteUtc - telemetryAt).TotalMilliseconds;
+        _telemetryLatencySamples++;
+
+        var changed = !_lastSent.HasValue || !_lastSent.Value.Equals(frame);
+        var delayMs = changed ? Math.Max(5, _settings.BleBurstRateMs) : Math.Max(5, _settings.BleSteadyRateMs);
+        await Task.Delay(delayMs, cancellationToken);
+    }
+
+    private async Task WritePayloadWithReconnectAsync(byte[] payload, Func<byte[], CancellationToken, Task> writer, CancellationToken cancellationToken)
+    {
+        try
+        {
             await writer(payload, cancellationToken);
             _connectionState = DeviceConnectionState.Connected;
             _lastStatusMessage = "Connected.";
         }
         catch (Exception ex) when (IsClosedBleObject(ex))
         {
-            _logger.LogWarning(ex, "BLE object was closed; reconnecting and retrying write once");
-            InvalidateConnection("BLE connection was closed; reconnecting...");
-            await EnsureConnectedAsync(cancellationToken);
+            InvalidateConnection("BLE connection closed. Reconnecting...");
+            await ReconnectWithBackoffAsync(cancellationToken);
+            if (_writeCharacteristic is null)
+                throw;
 
-            var writer = _writeCharacteristic;
-            if (writer is null)
-                throw new InvalidOperationException("No BLE write characteristic is connected after reconnect.");
-
-            await writer(payload, cancellationToken);
-            _connectionState = DeviceConnectionState.Connected;
-            _lastStatusMessage = "Connected.";
+            await _writeCharacteristic(payload, cancellationToken);
         }
-        catch (Exception ex)
+    }
+
+    private async Task ReconnectWithBackoffAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
+            return;
+
+        var attempt = 0;
+        var random = new Random();
+        while (!cancellationToken.IsCancellationRequested)
         {
-            InvalidateConnection("Send failed: " + ex.Message);
-            throw;
+            attempt++;
+            try
+            {
+                await ConnectAsync(_settings.BluetoothAddress, cancellationToken);
+                return;
+            }
+            catch
+            {
+                var baseMs = Math.Max(100, _settings.BleReconnectBackoffBaseMs);
+                var wait = Math.Min(5000, baseMs * (int)Math.Pow(2, Math.Min(attempt, 5))) + random.Next(30, 250);
+                await Task.Delay(wait, cancellationToken);
+            }
         }
     }
 
     private LightFrame ApplyGlobalMaxBrightness(LightFrame frame)
     {
-        if (!frame.IsOn)
-            return frame;
+        if (!frame.IsOn) return frame;
 
-        var globalScale = Compatibility.Clamp(_settings.MaxBrightness, 0, 100) / 100.0;
-        var filteredBrightness = (byte)Compatibility.Clamp((int)Math.Round(frame.Brightness * globalScale), 0, 255);
-        return new LightFrame(frame.R, frame.G, frame.B, filteredBrightness, frame.IsOn);
+        var maxByte = (byte)Compatibility.Clamp((int)Math.Round(Compatibility.Clamp(_settings.MaxBrightness, 0, 100) * 2.55), 0, 255);
+        return frame with { Brightness = (byte)Math.Min(frame.Brightness, maxByte) };
     }
 
     private async Task WriteGattAsync(byte[] payload, CancellationToken cancellationToken)
     {
-        var characteristic = _writeGattCharacteristic;
-        if (characteristic is null)
-            throw new InvalidOperationException("No BLE write characteristic is connected.");
-
+        var characteristic = _writeGattCharacteristic ?? throw new InvalidOperationException("No BLE characteristic.");
         using var writer = new DataWriter();
         writer.WriteBytes(payload);
-        var buffer = writer.DetachBuffer();
-
-        var option = characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)
+        var status = await characteristic.WriteValueAsync(writer.DetachBuffer(), characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse)
             ? GattWriteOption.WriteWithoutResponse
-            : GattWriteOption.WriteWithResponse;
-
-        var status = await characteristic.WriteValueAsync(buffer, option);
+            : GattWriteOption.WriteWithResponse);
         cancellationToken.ThrowIfCancellationRequested();
 
-        _logger.LogDebug("BLE GATT write [{Payload}] status={Status}", Compatibility.ToHexString(payload), status);
         if (status != GattCommunicationStatus.Success)
             throw new InvalidOperationException($"BLE write failed with status {status}.");
     }
@@ -343,22 +293,15 @@ public sealed class BleLightController : IDisposable
         if (preferredServiceResult.Status == GattCommunicationStatus.Success && preferredServiceResult.Services.Count > 0)
         {
             var characteristic = await ResolveWriteCharacteristicFromServicesAsync(preferredServiceResult.Services, cancellationToken);
-            if (characteristic is not null)
-                return characteristic;
+            if (characteristic is not null) return characteristic;
         }
 
         var allServicesResult = await device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
         if (allServicesResult.Status != GattCommunicationStatus.Success || allServicesResult.Services.Count == 0)
-        {
-            throw new InvalidOperationException("Connected to the BLE device, but no GATT services were available.");
-        }
+            throw new InvalidOperationException("No GATT services available.");
 
-        var fallbackCharacteristic = await ResolveWriteCharacteristicFromServicesAsync(allServicesResult.Services, cancellationToken);
-        if (fallbackCharacteristic is not null)
-            return fallbackCharacteristic;
-
-        var services = string.Join(", ", allServicesResult.Services.Select(service => ShortUuid(service.Uuid)));
-        throw new InvalidOperationException("Connected to the BLE device, but no writable BLE characteristic was found. Services: " + services);
+        return await ResolveWriteCharacteristicFromServicesAsync(allServicesResult.Services, cancellationToken)
+            ?? throw new InvalidOperationException("No writable BLE characteristic was found.");
     }
 
     private async Task<GattCharacteristic?> ResolveWriteCharacteristicFromServicesAsync(IReadOnlyList<GattDeviceService> services, CancellationToken cancellationToken)
@@ -369,12 +312,10 @@ public sealed class BleLightController : IDisposable
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var result = await service.GetCharacteristicsForUuidAsync(characteristicUuid, BluetoothCacheMode.Uncached);
-                if (result.Status != GattCommunicationStatus.Success || result.Characteristics.Count == 0)
-                    continue;
-
-                var characteristic = result.Characteristics.FirstOrDefault(IsWritable);
-                if (characteristic is not null)
-                    return characteristic;
+                var characteristic = result.Status == GattCommunicationStatus.Success
+                    ? result.Characteristics.FirstOrDefault(IsWritable)
+                    : null;
+                if (characteristic is not null) return characteristic;
             }
         }
 
@@ -382,12 +323,10 @@ public sealed class BleLightController : IDisposable
         {
             cancellationToken.ThrowIfCancellationRequested();
             var result = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
-            if (result.Status != GattCommunicationStatus.Success)
-                continue;
-
-            var characteristic = result.Characteristics.FirstOrDefault(IsWritable);
-            if (characteristic is not null)
-                return characteristic;
+            var characteristic = result.Status == GattCommunicationStatus.Success
+                ? result.Characteristics.FirstOrDefault(IsWritable)
+                : null;
+            if (characteristic is not null) return characteristic;
         }
 
         return null;
@@ -396,32 +335,15 @@ public sealed class BleLightController : IDisposable
     private async Task<ResolvedBluetoothDevice> ResolveBluetoothDeviceAsync(string bluetoothAddress, CancellationToken cancellationToken)
     {
         if (TryParseBluetoothAddress(bluetoothAddress, out var directAddress))
-        {
-            var configuredDeviceId =
-                string.Equals(_settings.BluetoothAddress, bluetoothAddress, StringComparison.OrdinalIgnoreCase) &&
-                IsWindowsBluetoothDeviceId(_settings.BluetoothDeviceId)
-                    ? _settings.BluetoothDeviceId
-                    : null;
+            return new ResolvedBluetoothDevice(directAddress, IsWindowsBluetoothDeviceId(_settings.BluetoothDeviceId) ? _settings.BluetoothDeviceId : null);
 
-            return new ResolvedBluetoothDevice(directAddress, configuredDeviceId);
-        }
-
-        var query = bluetoothAddress.Trim();
         var devices = await DiscoverDevicesAsync(cancellationToken);
-        var match = devices.FirstOrDefault(device =>
-            Contains(device.Name, query) ||
-            Contains(device.Id, query) ||
-            Contains(device.AddressDescription, query) ||
-            Contains(device.BluetoothAdress.ToString("X12"), query) ||
-            Contains(query, device.Id) ||
-            Contains(query, device.Name));
-
+        var query = bluetoothAddress.Trim();
+        var match = devices.FirstOrDefault(device => Contains(device.Name, query) || Contains(device.Id, query) || Contains(device.AddressDescription, query));
         if (match is null)
-            throw new InvalidOperationException("Bluetooth device not found. Click Discover devices and select OA000B/HappyLighting from the list.");
+            throw new InvalidOperationException("Bluetooth device not found.");
 
-        return new ResolvedBluetoothDevice(
-            match.BluetoothAdress,
-            IsWindowsBluetoothDeviceId(match.Id) ? match.Id : null);
+        return new ResolvedBluetoothDevice(match.BluetoothAdress, IsWindowsBluetoothDeviceId(match.Id) ? match.Id : null);
     }
 
     private static async Task<BluetoothLEDevice?> OpenBluetoothDeviceAsync(ResolvedBluetoothDevice target, CancellationToken cancellationToken)
@@ -430,28 +352,21 @@ public sealed class BleLightController : IDisposable
         {
             var device = await BluetoothLEDevice.FromIdAsync(target.DeviceId);
             cancellationToken.ThrowIfCancellationRequested();
-            if (device is not null)
-            {
-                if (device.BluetoothAddress == 0 || device.BluetoothAddress == target.Address)
-                    return device;
-
-                device.Dispose();
-            }
+            if (device is not null && (device.BluetoothAddress == 0 || device.BluetoothAddress == target.Address))
+                return device;
+            device?.Dispose();
         }
 
-        var fallbackDevice = await BluetoothLEDevice.FromBluetoothAddressAsync(target.Address);
-        cancellationToken.ThrowIfCancellationRequested();
-        return fallbackDevice;
+        return await BluetoothLEDevice.FromBluetoothAddressAsync(target.Address);
     }
 
     public static async Task<IReadOnlyList<BTDevice>> DiscoverDevicesAsync(CancellationToken cancellationToken)
     {
         var devices = new List<BTDevice>();
-
         using (var lightLister = new LightDeviceLister { UseHardScan = true })
         {
             lightLister.Start();
-            await Task.Delay(4500, cancellationToken);
+            await Task.Delay(3000, cancellationToken);
             devices.AddRange(lightLister.GetAllFoundDevices());
         }
 
@@ -461,7 +376,7 @@ public sealed class BleLightController : IDisposable
         return devices
             .GroupBy(device => device.BluetoothAdress)
             .Select(SelectBestDiscoveredDevice)
-            .OrderBy(device => device.Name)
+            .OrderBy(d => d.Name)
             .ToList();
     }
 
@@ -478,34 +393,20 @@ public sealed class BleLightController : IDisposable
     {
         var found = new List<BTDevice>();
         var selector = BluetoothLEDevice.GetDeviceSelector();
-        var deviceInfos = await DeviceInformation.FindAllAsync(selector);
+        var infos = await DeviceInformation.FindAllAsync(selector);
 
-        foreach (var deviceInfo in deviceInfos)
+        foreach (var info in infos)
         {
             cancellationToken.ThrowIfCancellationRequested();
-
-            BluetoothLEDevice? bluetoothDevice = null;
+            BluetoothLEDevice? bt = null;
             try
             {
-                bluetoothDevice = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
-                if (bluetoothDevice is null || bluetoothDevice.BluetoothAddress == 0)
-                    continue;
-
-                found.Add(new BTDevice
-                {
-                    Name = string.IsNullOrWhiteSpace(deviceInfo.Name) ? bluetoothDevice.Name : deviceInfo.Name,
-                    Id = deviceInfo.Id,
-                    BluetoothAdress = bluetoothDevice.BluetoothAddress
-                });
+                bt = await BluetoothLEDevice.FromIdAsync(info.Id);
+                if (bt is null || bt.BluetoothAddress == 0) continue;
+                found.Add(new BTDevice { Name = string.IsNullOrWhiteSpace(info.Name) ? bt.Name : info.Name, Id = info.Id, BluetoothAdress = bt.BluetoothAddress });
             }
-            catch
-            {
-                // Some BLE devices expose incomplete metadata and can fail while resolving.
-            }
-            finally
-            {
-                bluetoothDevice?.Dispose();
-            }
+            catch { }
+            finally { bt?.Dispose(); }
         }
 
         return found;
@@ -514,32 +415,22 @@ public sealed class BleLightController : IDisposable
     private static async Task<IReadOnlyList<BTDevice>> DiscoverBluetoothAdvertisementsAsync(CancellationToken cancellationToken)
     {
         var found = new Dictionary<ulong, BTDevice>();
-        using var registration = cancellationToken.Register(() => { });
-
-        var watcher = new BluetoothLEAdvertisementWatcher
-        {
-            ScanningMode = BluetoothLEScanningMode.Active
-        };
-
+        var watcher = new BluetoothLEAdvertisementWatcher { ScanningMode = BluetoothLEScanningMode.Active };
         watcher.Received += (_, args) =>
         {
-            var address = args.BluetoothAddress;
-            if (address == 0 || found.ContainsKey(address))
-                return;
-
-            var name = args.Advertisement.LocalName;
-            found[address] = new BTDevice
+            if (args.BluetoothAddress == 0 || found.ContainsKey(args.BluetoothAddress)) return;
+            found[args.BluetoothAddress] = new BTDevice
             {
-                Name = string.IsNullOrWhiteSpace(name) ? $"BLE {address:X12}" : name,
-                Id = address.ToString("X12"),
-                BluetoothAdress = address
+                Name = string.IsNullOrWhiteSpace(args.Advertisement.LocalName) ? $"BLE {args.BluetoothAddress:X12}" : args.Advertisement.LocalName,
+                Id = args.BluetoothAddress.ToString("X12"),
+                BluetoothAdress = args.BluetoothAddress
             };
         };
 
         try
         {
             watcher.Start();
-            await Task.Delay(10000, cancellationToken);
+            await Task.Delay(6000, cancellationToken);
         }
         finally
         {
@@ -551,25 +442,14 @@ public sealed class BleLightController : IDisposable
 
     private static bool TryParseBluetoothAddress(string bluetoothAddress, out ulong address)
     {
-        var hex = bluetoothAddress
-            .Replace(":", string.Empty)
-            .Replace("-", string.Empty)
-            .Replace(" ", string.Empty)
-            .Trim();
-
+        var hex = bluetoothAddress.Replace(":", string.Empty).Replace("-", string.Empty).Replace(" ", string.Empty).Trim();
         if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             hex = hex.Substring(2);
-
         return ulong.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out address);
     }
 
     private static bool Contains(string? value, string? query)
-    {
-        if (string.IsNullOrWhiteSpace(value) || string.IsNullOrWhiteSpace(query))
-            return false;
-
-        return value!.IndexOf(query!, StringComparison.OrdinalIgnoreCase) >= 0;
-    }
+        => !string.IsNullOrWhiteSpace(value) && !string.IsNullOrWhiteSpace(query) && value!.IndexOf(query!, StringComparison.OrdinalIgnoreCase) >= 0;
 
     private static bool IsWindowsBluetoothDeviceId(string? id)
     {
@@ -579,18 +459,7 @@ public sealed class BleLightController : IDisposable
     }
 
     private static bool IsWritable(GattCharacteristic characteristic)
-    {
-        return characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Write) ||
-            characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse);
-    }
-
-    private static string ShortUuid(Guid uuid)
-    {
-        var value = uuid.ToString();
-        return value.EndsWith("-0000-1000-8000-00805f9b34fb", StringComparison.OrdinalIgnoreCase)
-            ? value.Substring(4, 4).ToUpperInvariant()
-            : value;
-    }
+        => characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Write) || characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse);
 
     private void InvalidateConnection(string message)
     {
@@ -601,24 +470,19 @@ public sealed class BleLightController : IDisposable
         _bleDevice = null;
         _connectionState = DeviceConnectionState.Error;
         _lastStatusMessage = message;
+        _lastError = message;
     }
 
     private string BuildDeviceLabel()
     {
-        if (!string.IsNullOrWhiteSpace(_settings.BluetoothDeviceName))
-            return _settings.BluetoothDeviceName;
-
-        if (!string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
-            return _settings.BluetoothAddress;
-
+        if (!string.IsNullOrWhiteSpace(_settings.BluetoothDeviceName)) return _settings.BluetoothDeviceName;
+        if (!string.IsNullOrWhiteSpace(_settings.BluetoothAddress)) return _settings.BluetoothAddress;
         return "No device";
     }
 
     private static bool IsClosedBleObject(Exception ex)
     {
-        return ex is ObjectDisposedException ||
-            ex.HResult == unchecked((int)0x80000013) ||
-            (ex.Message?.IndexOf("object has been closed", StringComparison.OrdinalIgnoreCase) >= 0);
+        return ex is ObjectDisposedException || ex.HResult == unchecked((int)0x80000013) || (ex.Message?.IndexOf("object has been closed", StringComparison.OrdinalIgnoreCase) >= 0);
     }
 
     private sealed record ResolvedBluetoothDevice(ulong Address, string? DeviceId);
@@ -627,17 +491,10 @@ public sealed class BleLightController : IDisposable
     {
         _cts.Cancel();
         _signal.Release();
-        try
-        {
-            _senderLoop.GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-        }
+        try { _senderLoop.GetAwaiter().GetResult(); } catch { }
         _signal.Dispose();
         _connectLock.Dispose();
         _cts.Dispose();
         _bleDevice?.Dispose();
-        _connectedAddress = null;
     }
 }

@@ -6,22 +6,25 @@ public sealed class BrightnessProfile
     {
         var value = settings.DayBrightness;
         if (settings.AutoNightMode && (telemetry.HeadlightsOn || telemetry.NightSession))
-        {
             value = settings.NightBrightness;
-        }
 
-        return (byte)Math.Round(value * 2.55);
+        return ToByte(value, settings);
     }
 
     public byte ResolveIdleBrightness(PluginSettings settings)
     {
-        var value = Compatibility.Clamp(settings.IdleBrightness, 0, 100);
-        return (byte)Math.Round(value * 2.55);
+        return ToByte(settings.IdleBrightness, settings);
     }
 
-    public int ApplyGlobalMax(PluginSettings settings, int brightnessPercent)
+    private static byte ToByte(int percent, PluginSettings settings)
     {
-        var globalMax = Compatibility.Clamp(settings.MaxBrightness, 0, 100);
-        return Math.Min(Compatibility.Clamp(brightnessPercent, 0, 100), globalMax);
+        var normalized = Compatibility.Clamp(percent, 0, 100) / 100.0;
+        if (settings.EnableGammaCorrection)
+        {
+            var gamma = Math.Max(0.1, settings.Gamma);
+            normalized = Math.Pow(normalized, 1.0 / gamma);
+        }
+
+        return (byte)Compatibility.Clamp((int)Math.Round(normalized * 255), 0, 255);
     }
 }
