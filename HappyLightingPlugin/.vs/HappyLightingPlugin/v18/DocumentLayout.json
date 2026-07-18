@@ -1,7 +1,32 @@
 {
   "Version": 1,
   "WorkspaceRootPath": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\",
-  "Documents": [],
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\blelightcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\blelightcontroller.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\happylightingplugin.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\happylightingplugin.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\effectstatemachine.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\effectstatemachine.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\models.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\models.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\telemetrypipeline.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\telemetrypipeline.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|c:\\users\\igorg\\onedrive\\documents\\workspace\\simhub-happylighting\\happylightingplugin\\src\\telemetryreader.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "RelativeMoniker": "D:0:0:{7AC2033E-57C8-6225-3FD0-1BE3C170C8FB}|HappyLightingPlugin.csproj|solutionrelative:src\\telemetryreader.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
+    }
+  ],
   "DocumentGroupContainers": [
     {
       "Orientation": 0,
@@ -9,11 +34,110 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": -1,
+          "SelectedChildIndex": 1,
           "Children": [
             {
               "$type": "Bookmark",
               "Name": "ST:0:0:{1c4feeaa-4718-4aa9-859d-94ce25d182ba}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "BleLightController.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\BleLightController.cs",
+              "RelativeDocumentMoniker": "src\\BleLightController.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\BleLightController.cs",
+              "RelativeToolTip": "src\\BleLightController.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T02:01:36.057Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "EffectStateMachine.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\EffectStateMachine.cs",
+              "RelativeDocumentMoniker": "src\\EffectStateMachine.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\EffectStateMachine.cs",
+              "RelativeToolTip": "src\\EffectStateMachine.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T02:01:28.409Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "Models.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\Models.cs",
+              "RelativeDocumentMoniker": "src\\Models.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\Models.cs",
+              "RelativeToolTip": "src\\Models.cs",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T02:01:17.83Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "TelemetryPipeline.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\TelemetryPipeline.cs",
+              "RelativeDocumentMoniker": "src\\TelemetryPipeline.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\TelemetryPipeline.cs",
+              "RelativeToolTip": "src\\TelemetryPipeline.cs",
+              "ViewState": "AgIAAHcAAAAAAAAAAAAuwHcAAAAuAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T01:58:03.662Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "HappyLightingPlugin.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\HappyLightingPlugin.cs",
+              "RelativeDocumentMoniker": "src\\HappyLightingPlugin.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\HappyLightingPlugin.cs",
+              "RelativeToolTip": "src\\HappyLightingPlugin.cs",
+              "ViewState": "AgIAAJoAAAAAAAAAAAAYwK0AAAAXAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T01:57:10.154Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "FloatingWindowState": {
+        "Id": "47c6e73e-e34c-4343-b7ae-a5913bfe7d35",
+        "Display": 0,
+        "X": 3982,
+        "Y": 80,
+        "Width": 1370,
+        "Height": 784,
+        "WindowState": 0
+      },
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 0,
+          "Children": [
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "TelemetryReader.cs",
+              "DocumentMoniker": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\TelemetryReader.cs",
+              "RelativeDocumentMoniker": "src\\TelemetryReader.cs",
+              "ToolTip": "C:\\Users\\igorg\\OneDrive\\Documents\\workspace\\simhub-happylighting\\HappyLightingPlugin\\src\\TelemetryReader.cs",
+              "RelativeToolTip": "src\\TelemetryReader.cs",
+              "ViewState": "AgIAAAUAAAAAAAAAAAAQwBoAAABMAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
+              "WhenOpened": "2026-05-27T01:47:41.306Z",
+              "EditorCaption": ""
             }
           ]
         }

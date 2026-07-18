@@ -25,6 +25,12 @@ public sealed class HappyLightingSimHubPlugin : IPlugin, IDataPlugin, ISettingPl
         Settings = this.ReadCommonSettings("GeneralSettings", () => new PluginSettings());
         _lifecycle.InitAsync(Settings, CancellationToken.None).GetAwaiter().GetResult();
         this.AddAction("TestConnectionGreenBlink", (a, b) => TestConnection());
+        this.AddAction("HappyLightingLedOn", (a, b) => _lifecycle.SetManualLedOnAsync(CancellationToken.None).GetAwaiter().GetResult());
+        this.AddAction("HappyLightingLedOff", (a, b) => _lifecycle.SetManualLedOffAsync(CancellationToken.None).GetAwaiter().GetResult());
+        this.AddAction("HappyLightingLedToggle", (a, b) => _lifecycle.ToggleManualLedAsync(CancellationToken.None).GetAwaiter().GetResult());
+        this.AddAction("HappyLightingBrightnessUp", (a, b) => AdjustBrightnessAndRefresh(+5));
+        this.AddAction("HappyLightingBrightnessDown", (a, b) => AdjustBrightnessAndRefresh(-5));
+        this.AddAction("HappyLightingDisconnect", (a, b) => DisconnectDevice());
     }
 
     public void DataUpdate(PluginManager pluginManager, ref GameData data)
@@ -48,12 +54,25 @@ public sealed class HappyLightingSimHubPlugin : IPlugin, IDataPlugin, ISettingPl
 
     public void TestConnection() => _lifecycle.TestConnectionAsync(CancellationToken.None).GetAwaiter().GetResult();
     public Task TestConnectionAsync() => _lifecycle.TestConnectionAsync(CancellationToken.None);
-    public Task SendDebugColorAsync(RgbColor color, int maxBrightnessPercent) => _lifecycle.SendDebugColorAsync(color, maxBrightnessPercent, CancellationToken.None);
+    public Task DisconnectDeviceAsync() => _lifecycle.DisconnectDeviceAsync(CancellationToken.None);
+    public void DisconnectDevice() => _lifecycle.DisconnectDeviceAsync(CancellationToken.None).GetAwaiter().GetResult();
     public Task PlayEffectTestAsync(EffectTestKind effect) => _lifecycle.PlayEffectTestAsync(effect, CancellationToken.None);
     public Task ConnectSavedDeviceAsync() => _lifecycle.ConnectSavedDeviceAsync(CancellationToken.None);
     public DeviceStatusSnapshot GetDeviceStatus() => _lifecycle.GetDeviceStatus();
     public RuntimeDiagnostics GetDiagnostics() => _lifecycle.GetDiagnostics();
     public void SaveSettings() => this.SaveCommonSettings("GeneralSettings", Settings);
+    public void TriggerLedOn() => _lifecycle.SetManualLedOnAsync(CancellationToken.None).GetAwaiter().GetResult();
+    public void TriggerLedOff() => _lifecycle.SetManualLedOffAsync(CancellationToken.None).GetAwaiter().GetResult();
+    public void TriggerLedToggle() => _lifecycle.ToggleManualLedAsync(CancellationToken.None).GetAwaiter().GetResult();
+    public void TriggerBrightnessUp() => AdjustBrightnessAndRefresh(+5);
+    public void TriggerBrightnessDown() => AdjustBrightnessAndRefresh(-5);
+
+    private void AdjustBrightnessAndRefresh(int delta)
+    {
+        _lifecycle.AdjustGlobalBrightness(delta);
+        SaveSettings();
+        _lifecycle.RefreshOutputNowAsync(CancellationToken.None).GetAwaiter().GetResult();
+    }
 
     private static ImageSource CreateIcon()
     {

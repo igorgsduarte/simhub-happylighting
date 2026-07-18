@@ -10,12 +10,18 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
     private readonly EffectEngine _effectEngine;
     private readonly EffectStateMachine _stateMachine;
     private readonly BleLightController _bleController;
+    private readonly object _gameStateLock = new();
 
     private PluginSettings _settings = new();
     private DateTimeOffset _lastTelemetry = DateTimeOffset.MinValue;
     private int _isEffectTestRunning;
+    private int _isConnectionTransitionRunning;
+    private bool? _lastGameRunning;
     private TelemetrySnapshot _lastSnapshot = new();
     private EffectDecision _lastDecision = new(LightFrame.Off, "Off", EffectPriority.Off, "startup", DateTimeOffset.MinValue);
+    private LightFrame _lastQueuedFrame = LightFrame.Off;
+    private DateTimeOffset _lastQueueAt = DateTimeOffset.MinValue;
+    private bool _lastManualLedOn = true;
 
     public HappyLightingPluginLifecycle(ILoggerFactory? loggerFactory = null)
     {
@@ -30,9 +36,7 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
     public async Task InitAsync(PluginSettings settings, CancellationToken ct)
     {
         _settings = settings;
-        _settings.EnableLiveDebugColorSend = false;
         await _bleController.ConfigureAsync(settings);
-        _ = ConnectSavedDeviceAsync(CancellationToken.None);
     }
 
     public async Task ConnectSavedDeviceAsync(CancellationToken ct)
@@ -44,13 +48,16 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
         {
             await _bleController.ConfigureAsync(_settings);
             await _bleController.EnsureConnectedAsync(ct);
-            await SendGameNotRunningEffectIfEnabledAsync(ct);
+            await PlayConnectionReadySignalAsync(ct);
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Initial BLE connection failed; retry on next frame");
+            _logger.LogWarning(ex, "BLE connection failed; retry on next running telemetry frame");
         }
     }
+
+    public Task DisconnectDeviceAsync(CancellationToken ct)
+        => _bleController.DisconnectAsync(ct);
 
     public async Task TestConnectionAsync(CancellationToken ct)
     {
@@ -58,28 +65,15 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
         if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
             throw new InvalidOperationException("Select a Bluetooth device before running the connection test.");
 
-        await _bleController.ConnectAsync(_settings.BluetoothAddress, ct);
-        var green = new LightFrame(0, 255, 0, 255, true);
-        for (var i = 0; i < 3; i++)
+        try
         {
-            await _bleController.SendFrameNowAsync(green, ct);
-            await Task.Delay(220, ct);
-            await _bleController.SendFrameNowAsync(LightFrame.Off, ct);
-            await Task.Delay(220, ct);
+            await _bleController.ConnectAsync(_settings.BluetoothAddress, ct);
+            await PlayConnectionReadySignalAsync(ct);
         }
-
-        await SendGameNotRunningEffectIfEnabledAsync(ct);
-    }
-
-    public async Task SendDebugColorAsync(RgbColor color, int maxBrightnessPercent, CancellationToken ct)
-    {
-        await _bleController.ConfigureAsync(_settings);
-        if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
-            throw new InvalidOperationException("Select a Bluetooth device before sending a debug color.");
-
-        await _bleController.EnsureConnectedAsync(ct);
-        var brightness = (byte)Compatibility.Clamp((int)(Compatibility.Clamp(maxBrightnessPercent, 0, 100) * 2.55), 0, 255);
-        await _bleController.SendFrameNowAsync(new LightFrame(color.R, color.G, color.B, brightness, true), ct);
+        finally
+        {
+            await _bleController.DisconnectAsync(ct);
+        }
     }
 
     public async Task PlayEffectTestAsync(EffectTestKind effect, CancellationToken ct)
@@ -124,7 +118,23 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
         _lastTelemetry = snapshot.Timestamp;
         _lastSnapshot = snapshot;
 
-        if (_settings.EnableLiveDebugColorSend || Volatile.Read(ref _isEffectTestRunning) == 1)
+        if (Volatile.Read(ref _isEffectTestRunning) == 1)
+            return;
+
+        var transition = DetectGameRunningTransition(snapshot.GameRunning);
+        if (transition == GameRunningTransition.Started)
+        {
+            _ = RunGameStartedSequenceAsync(CancellationToken.None);
+            return;
+        }
+
+        if (transition == GameRunningTransition.Stopped)
+        {
+            _ = RunGameStoppedSequenceAsync(CancellationToken.None);
+            return;
+        }
+
+        if (!snapshot.GameRunning || Volatile.Read(ref _isConnectionTransitionRunning) == 1)
             return;
 
         var candidate = _effectEngine.Compute(snapshot, _settings);
@@ -137,12 +147,28 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
                 decision.EffectId, decision.Priority, decision.Reason, snapshot.PitLane, snapshot.PitLimiter, snapshot.FuelLiters, snapshot.MarshalFlag);
         }
 
+        var now = DateTimeOffset.UtcNow;
+        var isAnimated = IsAnimatedEffect(decision.EffectId);
+        var sameFrame = decision.Frame.Equals(_lastQueuedFrame);
+        var minAnimatedCadenceMs = Math.Max(40, Math.Min(_settings.BleBurstRateMs * 2, 120));
+
+        if (!isAnimated && sameFrame)
+            return;
+
+        if (isAnimated && sameFrame && (now - _lastQueueAt).TotalMilliseconds < minAnimatedCadenceMs)
+            return;
+
         _bleController.EnqueueFrame(decision.Frame, snapshot.Timestamp);
+        _lastQueuedFrame = decision.Frame;
+        _lastQueueAt = now;
     }
 
     public void TickTelemetryWatchdog()
     {
-        if (_settings.EnableLiveDebugColorSend || Volatile.Read(ref _isEffectTestRunning) == 1)
+        if (Volatile.Read(ref _isEffectTestRunning) == 1)
+            return;
+
+        if (!_lastSnapshot.GameRunning || Volatile.Read(ref _isConnectionTransitionRunning) == 1)
             return;
 
         var stale = DateTimeOffset.UtcNow - _lastTelemetry > TimeSpan.FromSeconds(2);
@@ -156,13 +182,37 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
         _bleController.EnqueueFrame(fallback, DateTimeOffset.UtcNow);
     }
 
-    public void TestRed() => _bleController.EnqueueFrame(new LightFrame(255, 0, 0, 255, true), DateTimeOffset.UtcNow);
-    public void TestGreen() => _bleController.EnqueueFrame(new LightFrame(0, 255, 0, 255, true), DateTimeOffset.UtcNow);
-    public void TestBlue() => _bleController.EnqueueFrame(new LightFrame(0, 0, 255, 255, true), DateTimeOffset.UtcNow);
-    public void TestWhite() => _bleController.EnqueueFrame(new LightFrame(255, 255, 255, 255, true), DateTimeOffset.UtcNow);
-    public void TestOff() => _bleController.EnqueueFrame(LightFrame.Off, DateTimeOffset.UtcNow);
+    public Task SetManualLedOnAsync(CancellationToken ct)
+    {
+        _lastManualLedOn = true;
+        return _bleController.SendFrameNowAsync(BuildManualOnFrame(), ct);
+    }
 
-    public void Dispose() => _bleController.Dispose();
+    public Task SetManualLedOffAsync(CancellationToken ct)
+    {
+        _lastManualLedOn = false;
+        return _bleController.SendFrameNowAsync(LightFrame.Off, ct);
+    }
+
+    public Task ToggleManualLedAsync(CancellationToken ct)
+        => _lastManualLedOn ? SetManualLedOffAsync(ct) : SetManualLedOnAsync(ct);
+
+    public int AdjustGlobalBrightness(int deltaPercent)
+    {
+        _settings.MaxBrightness = Compatibility.Clamp(_settings.MaxBrightness + deltaPercent, 1, 100);
+        return _settings.MaxBrightness;
+    }
+
+    public async Task RefreshOutputNowAsync(CancellationToken ct)
+    {
+        var frame = _lastManualLedOn ? BuildManualOnFrame() : _lastDecision.Frame;
+        await _bleController.SendFrameNowAsync(frame, ct);
+    }
+
+    public void Dispose()
+    {
+        _bleController.Dispose();
+    }
 
     private PluginSettings BuildEffectTestSettings(EffectTestKind effect)
     {
@@ -197,7 +247,104 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
             return;
 
         var decision = _effectEngine.Compute(new TelemetrySnapshot { GameRunning = false }, _settings);
+        _lastDecision = decision;
         await _bleController.SendFrameNowAsync(decision.Frame, ct);
+    }
+
+    private GameRunningTransition DetectGameRunningTransition(bool gameRunning)
+    {
+        lock (_gameStateLock)
+        {
+            if (Volatile.Read(ref _isConnectionTransitionRunning) == 1)
+                return GameRunningTransition.None;
+
+            var previous = _lastGameRunning;
+            _lastGameRunning = gameRunning;
+
+            if (previous != true && gameRunning)
+                return GameRunningTransition.Started;
+
+            if (previous == true && !gameRunning)
+                return GameRunningTransition.Stopped;
+
+            return GameRunningTransition.None;
+        }
+    }
+
+    private async Task RunGameStartedSequenceAsync(CancellationToken ct)
+    {
+        if (Interlocked.CompareExchange(ref _isConnectionTransitionRunning, 1, 0) != 0)
+            return;
+
+        try
+        {
+            await _bleController.ConfigureAsync(_settings);
+            await _bleController.EnsureConnectedAsync(ct);
+            await PlayConnectionReadySignalAsync(ct);
+            ResetQueuedFrameTracking();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "BLE game-start connection sequence failed; retry on next running telemetry frame");
+            lock (_gameStateLock)
+            {
+                _lastGameRunning = false;
+            }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isConnectionTransitionRunning, 0);
+        }
+    }
+
+    private async Task RunGameStoppedSequenceAsync(CancellationToken ct)
+    {
+        if (Interlocked.CompareExchange(ref _isConnectionTransitionRunning, 1, 0) != 0)
+            return;
+
+        try
+        {
+            await SendGameNotRunningEffectIfEnabledAsync(ct);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "BLE game-stop idle effect failed; disconnecting anyway");
+        }
+        finally
+        {
+            try
+            {
+                await _bleController.DisconnectAsync(ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "BLE runtime disconnect failed");
+            }
+
+            ResetQueuedFrameTracking();
+            Interlocked.Exchange(ref _isConnectionTransitionRunning, 0);
+        }
+    }
+
+    private async Task PlayConnectionReadySignalAsync(CancellationToken ct)
+    {
+        var green = new LightFrame(0, 255, 0, 255, true);
+        for (var i = 0; i < 3; i++)
+        {
+            await _bleController.SendFrameNowAsync(green, ct);
+            await Task.Delay(220, ct);
+            await _bleController.SendFrameNowAsync(LightFrame.Off, ct);
+            await Task.Delay(220, ct);
+        }
+
+        await _bleController.SendFrameNowAsync(green, ct);
+        await Task.Delay(TimeSpan.FromSeconds(3), ct);
+    }
+
+    private void ResetQueuedFrameTracking()
+    {
+        _lastQueuedFrame = LightFrame.Off;
+        _lastQueueAt = DateTimeOffset.MinValue;
     }
 
     private static PluginSettings CloneSettings(PluginSettings source)
@@ -207,7 +354,6 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
             BluetoothAddress = source.BluetoothAddress,
             BluetoothDeviceId = source.BluetoothDeviceId,
             BluetoothDeviceName = source.BluetoothDeviceName,
-            BluetoothAddressDescription = source.BluetoothAddressDescription,
             EnableCriticalFlags = source.EnableCriticalFlags,
             EnableMarshalFlags = source.EnableMarshalFlags,
             EnablePitLaneEffects = source.EnablePitLaneEffects,
@@ -220,9 +366,7 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
             NightLightColor = source.NightLightColor,
             IdleAmbientColor = source.IdleAmbientColor,
             GameNotRunningColor = source.GameNotRunningColor,
-            DebugColor = source.DebugColor,
             MaxBrightness = source.MaxBrightness,
-            EnableLiveDebugColorSend = source.EnableLiveDebugColorSend,
             YellowFlagColor = source.YellowFlagColor,
             BlueFlagColor = source.BlueFlagColor,
             GreenFlagColor = source.GreenFlagColor,
@@ -244,8 +388,27 @@ public sealed class HappyLightingPluginLifecycle : IDisposable
             KeepIdleOnTelemetryLoss = source.KeepIdleOnTelemetryLoss,
             EnableDetailedTelemetryLogs = source.EnableDetailedTelemetryLogs,
             EnableGammaCorrection = source.EnableGammaCorrection,
-            Gamma = source.Gamma,
-            EnableDiagnosticsPanel = source.EnableDiagnosticsPanel
+            Gamma = source.Gamma
         };
+    }
+
+    private LightFrame BuildManualOnFrame()
+    {
+        var brightness = (byte)Compatibility.Clamp((int)Math.Round(_settings.MaxBrightness * 2.55), 0, 255);
+        return new LightFrame(255, 255, 255, brightness, true);
+    }
+
+    private static bool IsAnimatedEffect(string effectId)
+    {
+        return effectId.Equals("PitLaneLimiter", StringComparison.OrdinalIgnoreCase) ||
+            effectId.Equals("CriticalFlags", StringComparison.OrdinalIgnoreCase) ||
+            effectId.Equals("MarshalFlags", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private enum GameRunningTransition
+    {
+        None,
+        Started,
+        Stopped
     }
 }

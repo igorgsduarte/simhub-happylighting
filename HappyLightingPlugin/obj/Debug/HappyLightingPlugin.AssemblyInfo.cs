@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("HappyLightingPlugin")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+db0854fda5901b9c3a2720d67b9a8f7030cb7868")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+1335b9704cc75b4d45ee662d42ead530c0cf251a")]
 [assembly: System.Reflection.AssemblyProductAttribute("HappyLightingPlugin")]
 [assembly: System.Reflection.AssemblyTitleAttribute("HappyLightingPlugin")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]

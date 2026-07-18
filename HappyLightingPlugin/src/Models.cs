@@ -101,7 +101,6 @@ public sealed class PluginSettings
     public string BluetoothAddress { get; set; } = string.Empty;
     public string BluetoothDeviceId { get; set; } = string.Empty;
     public string BluetoothDeviceName { get; set; } = string.Empty;
-    public string BluetoothAddressDescription { get; set; } = string.Empty;
 
     public bool EnableCriticalFlags { get; set; } = true;
     public bool EnableMarshalFlags { get; set; } = true;
@@ -116,16 +115,8 @@ public sealed class PluginSettings
     public RgbColor NightLightColor { get; set; } = new(255, 180, 120);
     public RgbColor IdleAmbientColor { get; set; } = new(70, 90, 120);
     public RgbColor GameNotRunningColor { get; set; } = new(255, 255, 255);
-    public RgbColor DebugColor { get; set; } = new(0, 255, 0);
 
     public int MaxBrightness { get; set; } = 100;
-    public int DebugMaxBrightness
-    {
-        get => MaxBrightness;
-        set => MaxBrightness = value;
-    }
-
-    public bool EnableLiveDebugColorSend { get; set; }
 
     public RgbColor YellowFlagColor { get; set; } = new(255, 180, 0);
     public RgbColor BlueFlagColor { get; set; } = new(0, 80, 255);
@@ -146,11 +137,6 @@ public sealed class PluginSettings
     public int BleBurstRateMs { get; set; } = 15;
     public int BleSteadyRateMs { get; set; } = 45;
     public int BleReconnectBackoffBaseMs { get; set; } = 300;
-    public int BleRateLimitMs
-    {
-        get => BleSteadyRateMs;
-        set => BleSteadyRateMs = value;
-    }
 
     public double LowFuelThresholdLiters { get; set; } = 5.0;
     public bool AutoNightMode { get; set; } = true;
@@ -159,5 +145,4 @@ public sealed class PluginSettings
 
     public bool EnableGammaCorrection { get; set; } = true;
     public double Gamma { get; set; } = 2.0;
-    public bool EnableDiagnosticsPanel { get; set; } = true;
 }

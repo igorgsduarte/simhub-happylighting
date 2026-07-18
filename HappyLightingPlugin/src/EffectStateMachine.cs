@@ -2,6 +2,13 @@ namespace HappyLightingPlugin;
 
 public sealed class EffectStateMachine
 {
+    private static readonly HashSet<string> ImmediateEffects = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "PitLaneLimiter",
+        "CriticalFlags",
+        "MarshalFlags"
+    };
+
     private EffectDecision _current = new(LightFrame.Off, "Off", EffectPriority.Off, "startup", DateTimeOffset.MinValue);
     private DateTimeOffset _lastSwitchAt = DateTimeOffset.MinValue;
 
@@ -16,11 +23,20 @@ public sealed class EffectStateMachine
             return _current;
         }
 
+        if (_current.EffectId.Equals("GameNotRunning", StringComparison.OrdinalIgnoreCase) &&
+            !candidate.EffectId.Equals("GameNotRunning", StringComparison.OrdinalIgnoreCase))
+        {
+            _lastSwitchAt = now;
+            _current = candidate with { HoldUntil = now + minActive };
+            return _current;
+        }
+
         var withinDebounce = now - _lastSwitchAt < debounce;
         var withinMinActive = now < _lastSwitchAt + minActive;
         var candidateMoreCritical = candidate.Priority < _current.Priority;
 
-        if ((withinDebounce || withinMinActive) && !candidateMoreCritical)
+        var isImmediate = ImmediateEffects.Contains(candidate.EffectId);
+        if (!isImmediate && (withinDebounce || withinMinActive) && !candidateMoreCritical)
             return _current;
 
         _lastSwitchAt = now;

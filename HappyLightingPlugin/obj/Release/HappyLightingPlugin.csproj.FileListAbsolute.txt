@@ -12,3 +12,6 @@ C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPl
 C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\README.md
 C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\HappyLightingPlugin.dll
 C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\Verify\HappyLightingPlugin.pdb
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\LocalRelease\README.md
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\LocalRelease\HappyLightingPlugin.dll
+C:\Users\igorg\OneDrive\Documents\workspace\simhub-happylighting\HappyLightingPlugin\bin\LocalRelease\HappyLightingPlugin.pdb

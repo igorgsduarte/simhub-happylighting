@@ -19,6 +19,8 @@ public sealed class BleLightController : IDisposable
         Guid.Parse("0000ffe1-0000-1000-8000-00805f9b34fb"),
         Guid.Parse("0000ffe9-0000-1000-8000-00805f9b34fb")
     };
+    private static readonly Dictionary<ulong, Guid> KnownWriteCharacteristicByAddress = new();
+    private static readonly object KnownCharacteristicLock = new();
 
     private readonly ILogger _logger;
     private readonly HappyLightingProtocol _protocol;
@@ -104,9 +106,13 @@ public sealed class BleLightController : IDisposable
             if (_bleDevice is null)
                 throw new InvalidOperationException("Windows could not open the selected BLE device.");
 
-            _writeGattCharacteristic = await ResolveWriteCharacteristicAsync(_bleDevice, cancellationToken);
+            _writeGattCharacteristic = await ResolveWithAccessRetryAsync(_bleDevice, target, cancellationToken);
             _writeCharacteristic = WriteGattAsync;
             _connectedAddress = target.Address;
+            lock (KnownCharacteristicLock)
+            {
+                KnownWriteCharacteristicByAddress[target.Address] = _writeGattCharacteristic.Uuid;
+            }
             _connectionState = DeviceConnectionState.Connected;
             _lastStatusMessage = "Connected.";
             _lastError = string.Empty;
@@ -122,12 +128,36 @@ public sealed class BleLightController : IDisposable
         }
     }
 
+    private async Task<GattCharacteristic> ResolveWithAccessRetryAsync(BluetoothLEDevice device, ResolvedBluetoothDevice target, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ResolveWriteCharacteristicAsync(device, target.Address, cancellationToken);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.IndexOf("AccessDenied", StringComparison.OrdinalIgnoreCase) >= 0)
+        {
+            // Some HappyLighting variants expose FFF0 as AccessDenied on first attempt.
+            // Reopen with address-only and retry once after a short delay.
+            _logger.LogWarning("GATT AccessDenied on first resolve; retrying with address-only reopen");
+            await Task.Delay(250, cancellationToken);
+
+            device.Dispose();
+            var reopened = await BluetoothLEDevice.FromBluetoothAddressAsync(target.Address);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (reopened is null)
+                throw;
+
+            _bleDevice = reopened;
+            return await ResolveWriteCharacteristicAsync(reopened, target.Address, cancellationToken);
+        }
+    }
+
     public async Task EnsureConnectedAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(_settings.BluetoothAddress))
             return;
 
-        if (_writeCharacteristic is not null && _connectedAddress.HasValue && _bleDevice is not null)
+        if (_writeCharacteristic is not null && _writeGattCharacteristic is not null && _connectedAddress.HasValue && _bleDevice is not null)
             return;
 
         await ConnectAsync(_settings.BluetoothAddress, cancellationToken);
@@ -151,6 +181,33 @@ public sealed class BleLightController : IDisposable
         _telemetryLatencySamples == 0 ? 0 : _sumTelemetryToWriteMs / _telemetryLatencySamples,
         _lastWriteUtc,
         _lastError);
+
+    public async Task ShutdownAsync(CancellationToken cancellationToken)
+        => await DisconnectCoreAsync(cancellationToken);
+
+    public async Task DisconnectAsync(CancellationToken cancellationToken)
+        => await DisconnectCoreAsync(cancellationToken);
+
+    private async Task DisconnectCoreAsync(CancellationToken cancellationToken)
+    {
+        await _connectLock.WaitAsync(cancellationToken);
+        try
+        {
+            _writeCharacteristic = null;
+            _writeGattCharacteristic = null;
+            _connectedAddress = null;
+            _pendingFrame = null;
+            _lastSent = null;
+            _bleDevice?.Dispose();
+            _bleDevice = null;
+            _connectionState = DeviceConnectionState.Disconnected;
+            _lastStatusMessage = "Disconnected.";
+        }
+        finally
+        {
+            _connectLock.Release();
+        }
+    }
 
     private async Task SenderLoopAsync()
     {
@@ -191,12 +248,13 @@ public sealed class BleLightController : IDisposable
     private async Task SendFrameInternalAsync(LightFrame frame, DateTimeOffset telemetryAt, CancellationToken cancellationToken)
     {
         frame = ApplyGlobalMaxBrightness(frame);
+        var previousFrame = _lastSent;
         var writer = _writeCharacteristic;
-        if (writer is null)
+        if (writer is null || _writeGattCharacteristic is null)
         {
             await EnsureConnectedAsync(cancellationToken);
             writer = _writeCharacteristic;
-            if (writer is null)
+            if (writer is null || _writeGattCharacteristic is null)
                 throw new InvalidOperationException("No BLE write characteristic is connected.");
         }
 
@@ -217,7 +275,7 @@ public sealed class BleLightController : IDisposable
         _sumTelemetryToWriteMs += (_lastWriteUtc - telemetryAt).TotalMilliseconds;
         _telemetryLatencySamples++;
 
-        var changed = !_lastSent.HasValue || !_lastSent.Value.Equals(frame);
+        var changed = !previousFrame.HasValue || !previousFrame.Value.Equals(frame);
         var delayMs = changed ? Math.Max(5, _settings.BleBurstRateMs) : Math.Max(5, _settings.BleSteadyRateMs);
         await Task.Delay(delayMs, cancellationToken);
     }
@@ -287,49 +345,144 @@ public sealed class BleLightController : IDisposable
             throw new InvalidOperationException($"BLE write failed with status {status}.");
     }
 
-    private async Task<GattCharacteristic> ResolveWriteCharacteristicAsync(BluetoothLEDevice device, CancellationToken cancellationToken)
+    private async Task<GattCharacteristic> ResolveWriteCharacteristicAsync(BluetoothLEDevice device, ulong address, CancellationToken cancellationToken)
     {
-        var preferredServiceResult = await device.GetGattServicesForUuidAsync(HappyLightingServiceUuid, BluetoothCacheMode.Uncached);
+        // Fast path 1: try last known characteristic UUID for this address using cached mode.
+        Guid knownCharacteristicUuid;
+        lock (KnownCharacteristicLock)
+        {
+            KnownWriteCharacteristicByAddress.TryGetValue(address, out knownCharacteristicUuid);
+        }
+        if (knownCharacteristicUuid != Guid.Empty)
+        {
+            var knownCached = await TryResolveCharacteristicByUuidAsync(device, knownCharacteristicUuid, BluetoothCacheMode.Cached, cancellationToken);
+            if (knownCached is not null)
+                return knownCached;
+        }
+
+        // Fast path 2: preferred service/characteristics in cached mode.
+        var preferredServiceResult = await device.GetGattServicesForUuidAsync(HappyLightingServiceUuid, BluetoothCacheMode.Cached);
         if (preferredServiceResult.Status == GattCommunicationStatus.Success && preferredServiceResult.Services.Count > 0)
         {
-            var characteristic = await ResolveWriteCharacteristicFromServicesAsync(preferredServiceResult.Services, cancellationToken);
+            var characteristic = await ResolveWriteCharacteristicFromServicesAsync(preferredServiceResult.Services, BluetoothCacheMode.Cached, cancellationToken);
             if (characteristic is not null) return characteristic;
         }
 
-        var allServicesResult = await device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
+        // Fast path 3: all services with cached mode.
+        var allServicesResult = await device.GetGattServicesAsync(BluetoothCacheMode.Cached);
+        if (allServicesResult.Status == GattCommunicationStatus.Success && allServicesResult.Services.Count > 0)
+        {
+            var cachedCharacteristic = await ResolveWriteCharacteristicFromServicesAsync(allServicesResult.Services, BluetoothCacheMode.Cached, cancellationToken);
+            if (cachedCharacteristic is not null)
+                return cachedCharacteristic;
+        }
+
+        // Slow path fallback: uncached full discovery.
+        preferredServiceResult = await device.GetGattServicesForUuidAsync(HappyLightingServiceUuid, BluetoothCacheMode.Uncached);
+        if (preferredServiceResult.Status == GattCommunicationStatus.Success && preferredServiceResult.Services.Count > 0)
+        {
+            var uncachedPreferred = await ResolveWriteCharacteristicFromServicesAsync(preferredServiceResult.Services, BluetoothCacheMode.Uncached, cancellationToken);
+            if (uncachedPreferred is not null)
+                return uncachedPreferred;
+        }
+
+        allServicesResult = await device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
         if (allServicesResult.Status != GattCommunicationStatus.Success || allServicesResult.Services.Count == 0)
             throw new InvalidOperationException("No GATT services available.");
 
-        return await ResolveWriteCharacteristicFromServicesAsync(allServicesResult.Services, cancellationToken)
-            ?? throw new InvalidOperationException("No writable BLE characteristic was found.");
+        var finalCharacteristic = await ResolveWriteCharacteristicFromServicesAsync(allServicesResult.Services, BluetoothCacheMode.Uncached, cancellationToken);
+        if (finalCharacteristic is not null)
+            return finalCharacteristic;
+
+        var gattMap = await BuildGattMapSummaryAsync(device, cancellationToken);
+        throw new InvalidOperationException("No writable BLE characteristic was found. GATT map: " + gattMap);
     }
 
-    private async Task<GattCharacteristic?> ResolveWriteCharacteristicFromServicesAsync(IReadOnlyList<GattDeviceService> services, CancellationToken cancellationToken)
+    private async Task<GattCharacteristic?> ResolveWriteCharacteristicFromServicesAsync(IReadOnlyList<GattDeviceService> services, BluetoothCacheMode cacheMode, CancellationToken cancellationToken)
     {
-        foreach (var characteristicUuid in PreferredWriteCharacteristicUuids)
-        {
-            foreach (var service in services)
-            {
-                cancellationToken.ThrowIfCancellationRequested();
-                var result = await service.GetCharacteristicsForUuidAsync(characteristicUuid, BluetoothCacheMode.Uncached);
-                var characteristic = result.Status == GattCommunicationStatus.Success
-                    ? result.Characteristics.FirstOrDefault(IsWritable)
-                    : null;
-                if (characteristic is not null) return characteristic;
-            }
-        }
+        var preferredOrder = PreferredWriteCharacteristicUuids
+            .Select((uuid, index) => new { uuid, index })
+            .ToDictionary(item => item.uuid, item => item.index);
+        GattCharacteristic? firstWritable = null;
+        GattCharacteristic? bestPreferred = null;
+        var bestPreferredOrder = int.MaxValue;
 
         foreach (var service in services)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var result = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
+            var result = await service.GetCharacteristicsAsync(cacheMode);
+            if (result.Status != GattCommunicationStatus.Success)
+                continue;
+
+            foreach (var characteristic in result.Characteristics)
+            {
+                if (!IsWritable(characteristic))
+                    continue;
+
+                firstWritable ??= characteristic;
+                if (!preferredOrder.TryGetValue(characteristic.Uuid, out var order) || order >= bestPreferredOrder)
+                    continue;
+
+                bestPreferred = characteristic;
+                bestPreferredOrder = order;
+                if (bestPreferredOrder == 0)
+                    return bestPreferred;
+            }
+        }
+
+        return bestPreferred ?? firstWritable;
+    }
+
+    private async Task<GattCharacteristic?> TryResolveCharacteristicByUuidAsync(BluetoothLEDevice device, Guid characteristicUuid, BluetoothCacheMode cacheMode, CancellationToken cancellationToken)
+    {
+        var servicesResult = await device.GetGattServicesAsync(cacheMode);
+        if (servicesResult.Status != GattCommunicationStatus.Success || servicesResult.Services.Count == 0)
+            return null;
+
+        foreach (var service in servicesResult.Services)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var result = await service.GetCharacteristicsForUuidAsync(characteristicUuid, cacheMode);
             var characteristic = result.Status == GattCommunicationStatus.Success
                 ? result.Characteristics.FirstOrDefault(IsWritable)
                 : null;
-            if (characteristic is not null) return characteristic;
+            if (characteristic is not null)
+                return characteristic;
         }
 
         return null;
+    }
+
+    private async Task<string> BuildGattMapSummaryAsync(BluetoothLEDevice device, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await device.GetGattServicesAsync(BluetoothCacheMode.Uncached);
+            if (result.Status != GattCommunicationStatus.Success || result.Services.Count == 0)
+                return $"services-status={result.Status}";
+
+            var parts = new List<string>();
+            foreach (var service in result.Services)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var characteristicsResult = await service.GetCharacteristicsAsync(BluetoothCacheMode.Uncached);
+                if (characteristicsResult.Status != GattCommunicationStatus.Success)
+                {
+                    parts.Add($"{ShortUuid(service.Uuid)}:[status={characteristicsResult.Status}]");
+                    continue;
+                }
+
+                var characteristicParts = characteristicsResult.Characteristics
+                    .Select(c => $"{ShortUuid(c.Uuid)}({c.CharacteristicProperties})");
+                parts.Add($"{ShortUuid(service.Uuid)}:[{string.Join(",", characteristicParts)}]");
+            }
+
+            return string.Join(" | ", parts);
+        }
+        catch (Exception ex)
+        {
+            return "gatt-map-failed: " + ex.Message;
+        }
     }
 
     private async Task<ResolvedBluetoothDevice> ResolveBluetoothDeviceAsync(string bluetoothAddress, CancellationToken cancellationToken)
@@ -460,6 +613,14 @@ public sealed class BleLightController : IDisposable
 
     private static bool IsWritable(GattCharacteristic characteristic)
         => characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Write) || characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.WriteWithoutResponse);
+
+    private static string ShortUuid(Guid uuid)
+    {
+        var value = uuid.ToString();
+        return value.EndsWith("-0000-1000-8000-00805f9b34fb", StringComparison.OrdinalIgnoreCase)
+            ? value.Substring(4, 4).ToUpperInvariant()
+            : value;
+    }
 
     private void InvalidateConnection(string message)
     {

@@ -39,13 +39,20 @@ public sealed class HappyLightingSettingsControl : UserControl
         panel.Children.Add(_deviceStatus);
         panel.Children.Add(_status);
 
-        panel.Children.Add(new SHSubSection { Title = "Conexao BLE", Content = BuildConnectionSection() });
-        panel.Children.Add(new SHSectionSeparator());
-        panel.Children.Add(new SHSubSection { Title = "Regras e Prioridade", Content = BuildRulesSection() });
-        panel.Children.Add(new SHSectionSeparator());
-        panel.Children.Add(new SHSubSection { Title = "Cores e Brilho", Content = BuildBrightnessAndColorsSection() });
-        panel.Children.Add(new SHSectionSeparator());
-        panel.Children.Add(new SHSubSection { Title = "Diagnostico", Content = BuildDiagnosticsSection() });
+        var tabs = new TabControl { Margin = new Thickness(0, 8, 0, 0) };
+
+        var general = new StackPanel { Orientation = Orientation.Vertical };
+        general.Children.Add(new SHSubSection { Title = "Conexao BLE", Content = BuildConnectionSection() });
+        general.Children.Add(new SHSectionSeparator());
+        general.Children.Add(new SHSubSection { Title = "Regras e Prioridade", Content = BuildRulesSection() });
+        general.Children.Add(new SHSectionSeparator());
+        general.Children.Add(new SHSubSection { Title = "Cores e Brilho", Content = BuildBrightnessAndColorsSection() });
+        general.Children.Add(new SHSectionSeparator());
+        general.Children.Add(new SHSubSection { Title = "Diagnostico", Content = BuildDiagnosticsSection() });
+
+        tabs.Items.Add(new TabItem { Header = "General", Content = general });
+        tabs.Items.Add(new TabItem { Header = "Triggers", Content = BuildTriggersSection() });
+        panel.Children.Add(tabs);
 
         RefreshUi();
         return panel;
@@ -85,9 +92,14 @@ public sealed class HappyLightingSettingsControl : UserControl
         row.Children.Add(_devices);
         panel.Children.Add(row);
 
-        var test = new SHButtonPrimary { Content = "Test connection", HorizontalAlignment = HorizontalAlignment.Left };
+        var controls = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 12) };
+        var test = new SHButtonPrimary { Content = "Test connection", Margin = new Thickness(0, 0, 8, 0) };
         test.Click += (_, _) => RunConnectionTest(test);
-        panel.Children.Add(test);
+        var disconnect = new SHButtonSecondary { Content = "Disconnect" };
+        disconnect.Click += (_, _) => RunDisconnect(disconnect);
+        controls.Children.Add(test);
+        controls.Children.Add(disconnect);
+        panel.Children.Add(controls);
 
         panel.Children.Add(MakeIntSlider("Burst rate (ms)", 5, 80, () => _plugin.Settings.BleBurstRateMs, v => _plugin.Settings.BleBurstRateMs = v));
         panel.Children.Add(MakeIntSlider("Steady rate (ms)", 10, 120, () => _plugin.Settings.BleSteadyRateMs, v => _plugin.Settings.BleSteadyRateMs = v));
@@ -140,6 +152,31 @@ public sealed class HappyLightingSettingsControl : UserControl
         return panel;
     }
 
+    private StackPanel BuildTriggersSection()
+    {
+        var panel = new StackPanel { Orientation = Orientation.Vertical };
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Use SimHub native mapping in Controls to bind keyboard, joystick, joypad, or other inputs to this plugin actions.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 8)
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = "Actions: HappyLightingLedOn, HappyLightingLedOff, HappyLightingLedToggle, HappyLightingBrightnessUp, HappyLightingBrightnessDown.",
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 0, 0, 12)
+        });
+
+        panel.Children.Add(BuildTriggerTestRow("LED On", _plugin.TriggerLedOn));
+        panel.Children.Add(BuildTriggerTestRow("LED Off", _plugin.TriggerLedOff));
+        panel.Children.Add(BuildTriggerTestRow("LED Toggle", _plugin.TriggerLedToggle));
+        panel.Children.Add(BuildTriggerTestRow("Brightness +5%", _plugin.TriggerBrightnessUp));
+        panel.Children.Add(BuildTriggerTestRow("Brightness -5%", _plugin.TriggerBrightnessDown));
+
+        return panel;
+    }
+
     private FrameworkElement MakeIntSlider(string label, int min, int max, Func<int> getter, Action<int> setter)
     {
         var panel = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 6, 0, 6) };
@@ -162,6 +199,27 @@ public sealed class HappyLightingSettingsControl : UserControl
         DependencyPropertyDescriptor.FromProperty(LedColorEditorRGB.ColorProperty, typeof(LedColorEditorRGB))
             ?.AddValueChanged(editor, (_, _) => UpdateSetting(() => setter(ToRgbColor(editor.Color))));
         return editor;
+    }
+
+    private FrameworkElement BuildTriggerTestRow(string label, Action testAction)
+    {
+        var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 6, 0, 6) };
+        row.Children.Add(new TextBlock { Text = label, Width = 220, VerticalAlignment = VerticalAlignment.Center });
+        var test = new SHButtonSecondary { Content = "Test action" };
+        test.Click += (_, _) =>
+        {
+            try
+            {
+                testAction();
+                _status.Text = $"{label}: action executed";
+            }
+            catch (Exception ex)
+            {
+                _status.Text = $"{label}: test failed - {ex.Message}";
+            }
+        };
+        row.Children.Add(test);
+        return row;
     }
 
     private async void DiscoverDevices(Button button)
@@ -192,6 +250,21 @@ public sealed class HappyLightingSettingsControl : UserControl
         catch (Exception ex)
         {
             _status.Text = "Test failed: " + ex.Message;
+        }
+        finally { button.IsEnabled = true; }
+    }
+
+    private async void RunDisconnect(Button button)
+    {
+        try
+        {
+            button.IsEnabled = false;
+            await _plugin.DisconnectDeviceAsync();
+            _status.Text = "Disconnected";
+        }
+        catch (Exception ex)
+        {
+            _status.Text = "Disconnect failed: " + ex.Message;
         }
         finally { button.IsEnabled = true; }
     }
